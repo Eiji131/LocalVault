@@ -1,132 +1,107 @@
-body {
-    font-family: Arial, sans-serif;
-    background-color: #f4f4f9;
-    color: #333;
-    display: flex;
-    justify-content: center;
-    padding: 20px;
+:root {
+    --primary-color: #007bff;
+    --secondary-color: #6c757d;
+    --background-color: #212529;
+    --card-color: #343a40;
+    --text-color: #f8f9fa;
+    --border-color: #495057;
+}
+
+body.dark-theme {
+    font-family: 'Poppins', sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-color);
 }
 
 .container {
-    background: #fff;
-    padding: 30px;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    max-width: 600px;
-    width: 100%;
+    background-color: var(--background-color);
 }
 
-h1 {
-    color: #007bff;
-    text-align: center;
-    margin-bottom: 20px;
+.card {
+    background-color: var(--card-color);
+    border: 1px solid var(--border-color);
 }
 
-.warning {
-    background-color: #ffcccc;
-    border: 1px solid #cc0000;
-    padding: 10px;
-    border-radius: 5px;
-    margin-bottom: 20px;
-    font-size: 0.9em;
+.form-control {
+    background-color: var(--background-color);
+    color: var(--text-color);
+    border-color: var(--border-color);
 }
 
-.input-group {
-    margin-bottom: 15px;
+.form-control:focus {
+    background-color: var(--background-color);
+    color: var(--text-color);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.25rem rgba(0, 123, 255, 0.25);
 }
 
-.input-group label {
-    display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
+.form-floating > label {
+    color: var(--secondary-color);
 }
 
-.input-group input {
-    width: calc(100% - 100px); /* Adjust width for the button */
-    padding: 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    box-sizing: border-box;
-    display: inline-block;
+.input-group-text {
+    background-color: var(--card-color);
+    border-color: var(--border-color);
+    color: var(--text-color);
 }
 
-#password {
-    margin-right: -4px; /* Fix spacing issue */
+.btn-primary {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
 }
 
-#saveButton, #clearButton {
-    width: 100%;
-    padding: 10px;
-    background-color: #28a745;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 16px;
-    margin-top: 10px;
+.btn-primary:hover {
+    opacity: 0.9;
 }
 
-#saveButton:hover, #clearButton:hover {
-    background-color: #218838;
+.table {
+    --bs-table-bg: var(--card-color);
+    --bs-table-striped-bg: #3a3d41;
+    --bs-table-color: var(--text-color);
+    --bs-table-border-color: var(--border-color);
+    --bs-table-hover-bg: #32383e;
 }
 
-#togglePassword {
-    padding: 10px 15px;
-    background-color: #6c757d;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    margin-left: 5px;
+#passwordTableBody td:nth-child(1),
+#passwordTableBody td:nth-child(2) {
+    color: #bbd9ff;
 }
 
-#passwordList {
-    list-style: none;
-    padding: 0;
+.modal-content {
+    background-color: var(--card-color);
+    color: var(--text-color);
+    border-color: var(--border-color);
 }
 
-#passwordList li {
-    background: #e9ecef;
-    padding: 10px;
-    border-radius: 4px;
-    margin-bottom: 10px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    word-break: break-all;
+.modal-header, .modal-footer {
+    border-bottom-color: var(--border-color);
+    border-top-color: var(--border-color);
+}
+
+.btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
 }
 
 .password-display {
-    color: #007bff;
+    color: var(--primary-color);
     font-weight: bold;
-}
-
-.delete-btn {
-    background-color: #dc3545;
-    color: white;
-    border: none;
-    padding: 5px 10px;
-    border-radius: 4px;
     cursor: pointer;
-    font-size: 0.8em;
 }
 
-.edit-btn {
-    background-color: #007bff; /* Blue color */
-    color: white;
-    border: none;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.8em;
-    margin-right: 5px; /* Space between Edit and Delete */
-}
-
-.edit-btn:hover {
-    background-color: #0056b3;
-}
-
-/* Ensure action cell contents are aligned nicely */
 .action-cell {
-    white-space: nowrap; /* Keep buttons on one line */
+    text-align: center;
+    white-space: nowrap; 
+}
+
+.navbar {
+    border-bottom: 1px solid var(--border-color);
+}
+
+.navbar-brand {
+    padding: 10px;
+    transition: all 0.3s ease-in-out;
+}
+
+.navbar-brand:hover {
+    transform: scale(1.05);
 }

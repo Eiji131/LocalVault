@@ -202,6 +202,85 @@ function executeClearAll() {
 }
 
 // ------------------------------------------------------------------
+// --- IMPORT/EXPORT LOGIC ---
+// ------------------------------------------------------------------
+
+/**
+ * Exports all passwords to a JSON file.
+ */
+function exportPasswords() {
+    if (currentPasswords.length === 0) {
+        alert("No passwords to export.");
+        return;
+    }
+
+    const dataStr = JSON.stringify(currentPasswords, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Handles the import of passwords from a JSON file.
+ */
+function importPasswords(event) {
+    const file = event.target.files[0];
+    if (!file) {
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const importedPasswords = JSON.parse(e.target.result);
+            if (Array.isArray(importedPasswords)) {
+                // Basic validation of the imported data
+                const validPasswords = importedPasswords.filter(p => p.website && p.username && p.password);
+                
+                if (validPasswords.length > 0) {
+                    const transaction = db.transaction([STORE_NAME], 'readwrite');
+                    const store = transaction.objectStore(STORE_NAME);
+                    
+                    validPasswords.forEach(password => {
+                        // To avoid duplicates, we can check if a password with the same website and username already exists.
+                        // For simplicity here, we'll just add them. A more robust solution might involve checking for duplicates.
+                        store.add(password);
+                    });
+
+                    transaction.oncomplete = () => {
+                        alert(`${validPasswords.length} passwords imported successfully.`);
+                        loadPasswords(); // Reload all passwords from the DB
+                    };
+
+                    transaction.onerror = (event) => {
+                        console.error("Error importing passwords:", event.target.errorCode);
+                        alert("An error occurred during the import process.");
+                    };
+                } else {
+                    alert("No valid password entries found in the file.");
+                }
+            } else {
+                alert("Invalid file format. Please select a valid JSON file.");
+            }
+        } catch (error) {
+            console.error("Error parsing JSON file:", error);
+            alert("Error reading or parsing the file. Make sure it is a valid JSON file.");
+        }
+    };
+    reader.readAsText(file);
+
+    // Reset the file input so the same file can be selected again
+    event.target.value = null;
+}
+
+
+// ------------------------------------------------------------------
 // --- EDIT MODAL LOGIC (MAJOR REWORK) ---
 // ------------------------------------------------------------------
 
@@ -555,6 +634,23 @@ window.onload = () => {
                     hideEditModal();
                 }
             });
+
+            // --- 3. IMPORT/EXPORT EVENT LISTENERS ---
+            const importButton = document.getElementById('importButton');
+            const exportButton = document.getElementById('exportButton');
+            const importFileInput = document.getElementById('importFile');
+
+            if (importButton) {
+                importButton.addEventListener('click', () => importFileInput.click());
+            }
+
+            if (exportButton) {
+                exportButton.addEventListener('click', exportPasswords);
+            }
+
+            if (importFileInput) {
+                importFileInput.addEventListener('change', importPasswords);
+            }
 
         })
         .catch(err => {

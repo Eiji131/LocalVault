@@ -85,7 +85,12 @@
                 </tbody>
             </table>
         </div>
-        <button id="clearButton" class="btn btn-danger mt-3">Clear All Passwords</button>
+        <div class="mt-3">
+            <button id="importButton" class="btn btn-info">Import Passwords</button>
+            <button id="exportButton" class="btn btn-success">Export Passwords</button>
+            <button id="clearButton" class="btn btn-danger">Clear All Passwords</button>
+            <input type="file" id="importFile" accept=".json" style="display: none;">
+        </div>
     </div>
 
     <!-- Clear Modal -->

@@ -227,9 +227,9 @@ function exportPasswords() {
 }
 
 /**
- * Handles the import of passwords from a JSON file.
+ * Handles the import of passwords from a file.
  */
-function importPasswords(event) {
+function importPasswords(event, format) {
     const file = event.target.files[0];
     if (!file) {
         return;
@@ -238,15 +238,21 @@ function importPasswords(event) {
     const reader = new FileReader();
     reader.onload = function(e) {
         try {
-            const importedPasswords = JSON.parse(e.target.result);
+            let importedPasswords;
+            if (format === 'json') {
+                importedPasswords = JSON.parse(e.target.result);
+            } else if (format === 'csv') {
+                importedPasswords = parseCSV(e.target.result);
+            }
+
             if (Array.isArray(importedPasswords)) {
                 // Basic validation of the imported data
                 const validPasswords = importedPasswords.filter(p => p.website && p.username && p.password);
-                
+
                 if (validPasswords.length > 0) {
                     const transaction = db.transaction([STORE_NAME], 'readwrite');
                     const store = transaction.objectStore(STORE_NAME);
-                    
+
                     validPasswords.forEach(password => {
                         // To avoid duplicates, we can check if a password with the same website and username already exists.
                         // For simplicity here, we'll just add them. A more robust solution might involve checking for duplicates.
@@ -266,17 +272,65 @@ function importPasswords(event) {
                     alert("No valid password entries found in the file.");
                 }
             } else {
-                alert("Invalid file format. Please select a valid JSON file.");
+                alert("Invalid file format. Please select a valid " + format.toUpperCase() + " file.");
             }
         } catch (error) {
-            console.error("Error parsing JSON file:", error);
-            alert("Error reading or parsing the file. Make sure it is a valid JSON file.");
+            console.error("Error parsing file:", error);
+            alert("Error reading or parsing the file. Make sure it is a valid " + format.toUpperCase() + " file.");
         }
     };
     reader.readAsText(file);
 
     // Reset the file input so the same file can be selected again
     event.target.value = null;
+}
+
+/**
+ * Parses a CSV string into an array of password objects.
+ */
+function parseCSV(csv) {
+    const lines = csv.split('\n');
+    const headers = lines[0].split(',').map(h => h.trim());
+    const passwords = [];
+
+    for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',').map(v => v.trim());
+        if (values.length === headers.length) {
+            const password = {};
+            for (let j = 0; j < headers.length; j++) {
+                password[headers[j]] = values[j];
+            }
+            passwords.push(password);
+        }
+    }
+
+    return passwords;
+}
+
+/**
+ * Exports all passwords to a CSV file.
+ */
+function exportToCSV() {
+    if (currentPasswords.length === 0) {
+        alert("No passwords to export.");
+        return;
+    }
+
+    const headers = ['website', 'username', 'password'];
+    const csv = [
+        headers.join(','),
+        ...currentPasswords.map(row => headers.map(fieldName => JSON.stringify(row[fieldName])).join(','))
+    ].join('\r\n');
+
+    const dataBlob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 }
 
 
@@ -639,17 +693,31 @@ window.onload = () => {
             const importButton = document.getElementById('importButton');
             const exportButton = document.getElementById('exportButton');
             const importFileInput = document.getElementById('importFile');
+            const csvImportButton = document.getElementById('csvImportButton');
+            const csvExportButton = document.getElementById('csvExportButton');
 
             if (importButton) {
-                importButton.addEventListener('click', () => importFileInput.click());
+                importButton.addEventListener('click', () => {
+                    importFileInput.accept = '.json';
+                    importFileInput.onchange = (event) => importPasswords(event, 'json');
+                    importFileInput.click();
+                });
+            }
+
+            if (csvImportButton) {
+                csvImportButton.addEventListener('click', () => {
+                    importFileInput.accept = '.csv';
+                    importFileInput.onchange = (event) => importPasswords(event, 'csv');
+                    importFileInput.click();
+                });
             }
 
             if (exportButton) {
                 exportButton.addEventListener('click', exportPasswords);
             }
 
-            if (importFileInput) {
-                importFileInput.addEventListener('change', importPasswords);
+            if (csvExportButton) {
+                csvExportButton.addEventListener('click', exportToCSV);
             }
 
         })

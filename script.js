@@ -3,15 +3,18 @@ const DB_NAME = 'PasswordVaultDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'passwords';
 
+// --- Global State Variables ---
 let db;
-
-// Variables for sorting
+let currentPasswords = []; // Holds all passwords currently in the DB
 let sortColumn = 'website';
 let sortDirection = 'asc';
+let isAwaitingConfirmation = false; // Global flag for modal state
+
+// --- Global Edit Modal Element References (Initialized later in window.onload) ---
+let editModal, editUsernameInput, editPasswordInput, editWebsiteSpan, editEntryIdInput;
 
 /**
  * 1. Opens or creates the IndexedDB database.
- * Handles the 'upgradeneeded' event to create the object store.
  */
 function openDB() {
     return new Promise((resolve, reject) => {
@@ -27,29 +30,28 @@ function openDB() {
             db = event.target.result;
             console.log("Database opened successfully.");
             
-            // --- FIX 1: Enable the button and update text ---
+            // Enable the button after DB connection is established
             const saveButton = document.getElementById('saveButton');
             saveButton.disabled = false;
             saveButton.textContent = 'Save Password';
-            // ------------------------------------------------
             
             resolve(db);
         };
 
-        // This runs only when the DB is created or the version number is increased.
         request.onupgradeneeded = (event) => {
             db = event.target.result;
             if (!db.objectStoreNames.contains(STORE_NAME)) {
-                // Create an object store to hold password entries.
-                // 'id' is the unique key path for each entry.
                 const objectStore = db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
-                // Optional: Create an index for quick lookups (e.g., by website name)
                 objectStore.createIndex('website', 'website', { unique: false });
                 console.log("Object store created.");
             }
         };
     });
 }
+
+// ------------------------------------------------------------------
+// --- CORE DB OPERATIONS ---
+// ------------------------------------------------------------------
 
 /**
  * 2. Retrieves all passwords from the database and updates the global list.
@@ -65,9 +67,8 @@ function loadPasswords() {
     const request = store.getAll();
 
     request.onsuccess = (event) => {
-        // FIX: Update the global array before rendering
         currentPasswords = event.target.result;
-        renderPasswords(currentPasswords);
+        sortAndRenderPasswords(); // Use the sorted version after initial load
     };
 
     request.onerror = (event) => {
@@ -76,7 +77,7 @@ function loadPasswords() {
 }
 
 /**
- * 3. Adds a new password entry to the database (SIMPLIFIED).
+ * 3. Adds a new password entry to the database.
  */
 function addPassword(entry) {
     if (!db) return;
@@ -88,10 +89,9 @@ function addPassword(entry) {
     request.onsuccess = (event) => {
         console.log("Password saved successfully.");
         
-        // OPTIMIZATION: Manually push the entry to the array with the new ID
         entry.id = event.target.result; // IndexedDB returns the auto-incremented ID
         currentPasswords.push(entry);
-        sortAndRenderPasswords(); // Re-sort and re-render to include the new entry in order
+        sortAndRenderPasswords(); 
         
         // Clear inputs after successful save
         document.getElementById('website').value = '';
@@ -105,7 +105,7 @@ function addPassword(entry) {
 }
 
 /**
- * 4. Deletes a password entry by its unique ID (OPTIMIZED).
+ * 4. Deletes a password entry by its unique ID.
  */
 function deletePassword(idToDelete) {
     if (!db) return;
@@ -113,18 +113,17 @@ function deletePassword(idToDelete) {
     // OPTIMIZATION: Update global array and DOM immediately
     const index = currentPasswords.findIndex(p => p.id === idToDelete);
     if (index !== -1) {
-        currentPasswords.splice(index, 1); // Remove from global array
-        document.querySelector(`.delete-btn[data-id="${idToDelete}"]`).closest('tr').remove(); // Remove row from DOM
+        currentPasswords.splice(index, 1); 
+        const row = document.querySelector(`.delete-btn[data-id="${idToDelete}"]`).closest('tr');
+        if (row) row.remove(); // Remove row from DOM
     }
 
-    // Use 'readwrite' transaction for deleting data
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
     const request = store.delete(idToDelete);
 
     request.onsuccess = () => {
         console.log(`Entry with ID ${idToDelete} deleted (Disk write confirmed).`);
-        // We no longer call loadPasswords() here!
     };
 
     request.onerror = (event) => {
@@ -140,107 +139,125 @@ function deletePassword(idToDelete) {
 function updatePassword(entry) {
     if (!db) return;
 
-    // 1. Update the global array immediately (makes the UX feel faster)
+    // 1. Update the global array immediately 
     const index = currentPasswords.findIndex(p => p.id === entry.id);
     if (index !== -1) {
         currentPasswords[index] = entry;
-        updateTableRow(entry); // **CRITICAL: Update the DOM immediately**
+        updateTableRow(entry); 
     }
 
     // 2. Start the asynchronous IndexedDB write
     const transaction = db.transaction([STORE_NAME], 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    
     const request = store.put(entry); 
 
-    request.onsuccess = () => {
-        // Now the disk write is complete. The UI is already updated.
-        console.log(`Entry with ID ${entry.id} updated successfully (Disk write confirmed).`);
-    };
-
     request.onerror = (event) => {
-        // If the disk write failed (rare), inform the user and reload the correct data
         console.error("Error updating password:", event.target.errorCode);
         alert("Failed to save changes to disk. Reloading data.");
         loadPasswords(); 
     };
 }
 
-/**
- * 8. Prompts user for new values and calls the update function.
- */
-function editEntry(idToEdit) {
-    // Find the current entry using the global list
-    const entry = currentPasswords.find(p => p.id === idToEdit);
-    if (!entry) {
-        alert("Error: Entry not found.");
-        return;
-    }
-
-    // Prompt for new values
-    const newUsername = prompt(`Editing ${entry.website}\n\nEnter new Username/Email:`, entry.username);
-    if (newUsername === null) return; 
-    
-    const newPassword = prompt(`Editing ${entry.website}\n\nEnter new Password:`, entry.password);
-    if (newPassword === null) return;
-    
-    // Check if values were actually changed
-    if (newUsername.trim() === entry.username && newPassword === entry.password) {
-        alert("No changes made.");
-        return;
-    }
-
-    // Create the updated entry object
-    const updatedEntry = {
-        ...entry, // Use the spread operator to copy all original properties (like id)
-        username: newUsername.trim(),
-        password: newPassword,
-    };
-
-    // Send the updated entry. The updatePassword function now handles DOM and DB changes.
-    updatePassword(updatedEntry);
-}
+// ------------------------------------------------------------------
+// --- MODAL & CLEAR ALL LOGIC ---
+// ------------------------------------------------------------------
 
 /**
- * 5. Clears all entries from the object store.
+ * Shows the custom modal for clearing all entries.
  */
 function clearAllPasswords() {
-     if (!db) return;
-
-    if (confirm('Are you sure you want to delete ALL saved passwords? This cannot be undone.')) {
-        const transaction = db.transaction([STORE_NAME], 'readwrite');
-        const store = transaction.objectStore(STORE_NAME);
-        const request = store.clear();
-
-        request.onsuccess = () => {
-            console.log("All passwords cleared.");
-            loadPasswords(); // Refresh the list (will be empty)
-        };
-
-        request.onerror = (event) => {
-            console.error("Error clearing passwords:", event.target.errorCode);
-        };
+    if (!db) return;
+    
+    const modal = document.getElementById('clearModal');
+    if (modal) {
+        modal.classList.add('show');
+        modal.classList.add('d-block');
+        isAwaitingConfirmation = true;
     }
 }
 
-
-// ------------------------------------------------------------------
-// --- DOM and Event Handling (Same as before, but calling new DB functions) ---
-// ------------------------------------------------------------------
-
-// Function to display the list of passwords
 /**
- * Function to display the list of passwords in a TABLE structure.
+ * Executes the database clear operation.
  */
-// Global variable to hold all loaded passwords
-let currentPasswords = []; // (Keep this)
+function executeClearAll() {
+    if (!db) return;
+
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.clear();
+
+    request.onsuccess = () => {
+        console.log("All passwords cleared.");
+        
+        currentPasswords = [];
+        renderPasswords(currentPasswords); 
+        
+        alert("All saved entries have been permanently deleted from this device.");
+    };
+
+    request.onerror = (event) => {
+        console.error("Error clearing passwords:", event.target.errorCode);
+        alert("Error: Failed to delete passwords from the database.");
+    };
+}
+
+// ------------------------------------------------------------------
+// --- EDIT MODAL LOGIC (MAJOR REWORK) ---
+// ------------------------------------------------------------------
 
 /**
- * 6. Function to display the list of passwords in a TABLE structure (UPDATED for Edit button).
+ * 8. Populates the Edit Modal with the entry's current data and displays it.
+ */
+function editEntry(idToEdit) {
+    const entry = currentPasswords.find(p => p.id === idToEdit);
+    if (!entry || !editModal) {
+        alert("Error: Entry not found or Edit Modal not initialized.");
+        return;
+    }
+
+    editWebsiteSpan.textContent = entry.website;
+    editUsernameInput.value = entry.username;
+    editPasswordInput.value = entry.password;
+    editEntryIdInput.value = entry.id;
+
+    editPasswordInput.type = 'password';
+    const toggleIcon = document.getElementById('toggleEditPassword').querySelector('i');
+    toggleIcon.classList.remove('fa-eye-slash');
+    toggleIcon.classList.add('fa-eye');
+
+    editModal.classList.add('show');
+    editModal.classList.add('d-block');
+}
+
+// ------------------------------------------------------------------
+// --- UI & UTILITY FUNCTIONS ---
+// ------------------------------------------------------------------
+
+/**
+ * Utility function to update a single row in the table (DOM).
+ */
+function updateTableRow(entry) {
+    const passwordSpan = document.querySelector(`.password-display[data-id="${entry.id}"]`);
+    if (!passwordSpan) return;
+
+    const row = passwordSpan.closest('tr');
+    if (!row) return;
+
+    // Cells are 0-indexed: [0: Website, 1: Username, 2: Password, 3: Actions]
+    row.cells[1].textContent = entry.username;
+    
+    // Reset the Password cell to masked
+    const maskedPassword = '*'.repeat(entry.password.length);
+    passwordSpan.textContent = maskedPassword;
+    passwordSpan.style.color = '#007bff'; 
+}
+
+/**
+ * Function to display the list of passwords in a TABLE structure (Uses data-label for responsiveness).
  */
 function renderPasswords(passwords) {
     const tableBody = document.getElementById('passwordTableBody');
-    tableBody.innerHTML = ''; // Clear existing rows
+    tableBody.innerHTML = ''; 
 
     if (passwords.length === 0) {
         const emptyRow = tableBody.insertRow();
@@ -255,27 +272,39 @@ function renderPasswords(passwords) {
         const row = tableBody.insertRow();
         const maskedPassword = '*'.repeat(entry.password.length);
 
-        // 1. Website Cell
-        row.insertCell().textContent = entry.website;
+        // 1. Website Cell 
+        const websiteCell = row.insertCell();
+        websiteCell.textContent = entry.website;
+        websiteCell.setAttribute('data-label', 'Website');
 
         // 2. Username Cell
-        row.insertCell().textContent = entry.username;
+        const usernameCell = row.insertCell();
+        usernameCell.textContent = entry.username;
+        usernameCell.setAttribute('data-label', 'Username');
 
         // 3. Password Cell (Interactive)
         const passwordCell = row.insertCell();
         passwordCell.innerHTML = `<span class="password-display" data-id="${entry.id}">${maskedPassword}</span>`;
         passwordCell.style.cursor = 'pointer';
+        passwordCell.setAttribute('data-label', 'Password');
 
         // 4. Actions Cell (Edit and Delete Buttons)
         const actionsCell = row.insertCell();
         actionsCell.className = 'action-cell';
         actionsCell.innerHTML = `
-            <button class="edit-btn" data-id="${entry.id}">Edit</button>
-            <button class="delete-btn" data-id="${entry.id}">Delete</button>
+            <button class="btn btn-sm btn-outline-primary edit-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Edit">
+                <i class="fas fa-pencil-alt"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Delete">
+                <i class="fas fa-trash-alt"></i>
+            </button>
         `;
+        actionsCell.setAttribute('data-label', 'Actions'); 
     });
 
-    // Add event listener for toggling password visibility (same as before)
+    // --- Attach Listeners to newly created table rows ---
+    // These listeners MUST be attached every time the table is re-rendered.
+
     tableBody.querySelectorAll('.password-display').forEach(span => {
         span.addEventListener('click', function() {
             const id = parseInt(this.getAttribute('data-id'));
@@ -286,7 +315,6 @@ function renderPasswords(passwords) {
         });
     });
 
-    // --- NEW: Add event listeners for Edit buttons ---
     tableBody.querySelectorAll('.edit-btn').forEach(button => {
         button.addEventListener('click', function() {
              const idToEdit = parseInt(this.getAttribute('data-id'));
@@ -294,7 +322,6 @@ function renderPasswords(passwords) {
         });
     });
 
-    // Add event listeners for delete buttons (same as before)
     tableBody.querySelectorAll('.delete-btn').forEach(button => {
         button.addEventListener('click', function() {
              const idToDelete = parseInt(this.getAttribute('data-id'));
@@ -303,12 +330,66 @@ function renderPasswords(passwords) {
     });
 }
 
-// Function to handle saving a new password
+/**
+ * Filters the currentPasswords array based on the search term.
+ * @param {string} searchTerm 
+ */
+function filterPasswords(searchTerm) {
+    const term = searchTerm.toLowerCase().trim();
+    
+    if (term === '') {
+        sortAndRenderPasswords();
+        return;
+    }
+
+    const filteredList = currentPasswords.filter(entry => 
+        entry.website.toLowerCase().includes(term) ||
+        entry.username.toLowerCase().includes(term)
+    );
+
+    renderPasswords(filteredList);
+}
+
+/**
+ * Function to toggle saved password visibility in the table.
+ */
+function togglePasswordVisibility(spanElement, realPassword) {
+    if (spanElement.textContent.includes('*')) {
+        spanElement.textContent = realPassword;
+        spanElement.style.color = 'red';
+    } else {
+        spanElement.textContent = '*'.repeat(realPassword.length);
+        spanElement.style.color = '#007bff';
+    }
+}
+
+/**
+ * Handles table sorting logic.
+ */
+function sortAndRenderPasswords() {
+    // We already have the currentPasswords globally. No need to pass it again.
+    currentPasswords.sort((a, b) => {
+        const valA = a[sortColumn].toLowerCase();
+        const valB = b[sortColumn].toLowerCase();
+
+        let comparison = 0;
+        if (valA > valB) { comparison = 1; } 
+        else if (valA < valB) { comparison = -1; }
+
+        return sortDirection === 'desc' ? comparison * -1 : comparison;
+    });
+
+    // Re-render the table with the sorted data
+    renderPasswords(currentPasswords);
+}
+
+// ------------------------------------------------------------------
+// --- GLOBAL EVENT LISTENERS (Form/Search/Table Headers) ---
+// ------------------------------------------------------------------
+
 document.getElementById('saveButton').addEventListener('click', function() {
-    // Check if the database connection is ready
     if (!db) {
         alert('Database is still loading. Please wait a moment and try again.');
-        // You might consider retrying openDB() here, but an alert is simpler for a local tool.
         return; 
     }
     
@@ -317,22 +398,17 @@ document.getElementById('saveButton').addEventListener('click', function() {
     const password = document.getElementById('password').value;
 
     if (website && username && password) {
-        // Create a new password object (IndexedDB will automatically add the 'id' key)
         const newEntry = { website, username, password, createdAt: new Date() };
-        
-        // Call the IndexedDB function
         addPassword(newEntry);
     } else {
         alert('Please fill out all fields.');
     }
 });
 
-// Function to handle clearing all passwords
 document.getElementById('clearButton').addEventListener('click', clearAllPasswords);
 
-// Function to toggle password input type (Show/Hide button)
 document.getElementById('togglePassword').addEventListener('click', function(event) {
-    event.preventDefault(); // Prevent form submission
+    event.preventDefault(); 
     const passwordInput = document.getElementById('password');
     if (passwordInput.type === 'password') {
         passwordInput.type = 'text';
@@ -343,56 +419,14 @@ document.getElementById('togglePassword').addEventListener('click', function(eve
     }
 });
 
-// Function to toggle *saved* password visibility
-function togglePasswordVisibility(spanElement, realPassword) {
-    if (spanElement.textContent.includes('*')) {
-        // Show the real password
-        spanElement.textContent = realPassword;
-        spanElement.style.color = 'red';
-    } else {
-        // Hide the password
-        spanElement.textContent = '*'.repeat(realPassword.length);
-        spanElement.style.color = '#007bff';
-    }
-}
-
-/**
- * Utility function to update a single row in the table (DOM).
- */
-function updateTableRow(entry) {
-    // 1. Find the password display span element for this entry
-    // We look for any span with the matching data-id attribute
-    const passwordSpan = document.querySelector(`.password-display[data-id="${entry.id}"]`);
-    if (!passwordSpan) return;
-
-    // 2. Find the entire row (<tr>) that contains this span
-    const row = passwordSpan.closest('tr');
-    if (!row) return;
-
-    // 3. Update the content of the Username (second) cell
-    // Cells are 0-indexed: [0: Website, 1: Username, 2: Password, 3: Actions]
-    row.cells[1].textContent = entry.username;
-    
-    // 4. Reset the Password cell to masked
-    const maskedPassword = '*'.repeat(entry.password.length);
-    passwordSpan.textContent = maskedPassword;
-    passwordSpan.style.color = '#007bff'; // Reset color
-}
-
-// ------------------------------------------------------------------
-// --- Sorting Logic (NEW FEATURE) ---
-// ------------------------------------------------------------------
-
 document.getElementById('passwordTable').addEventListener('click', function(event) {
     const target = event.target;
-    if (target.tagName === 'TH' && target.hasAttribute('data-sort')) {
+    if (target.tagName === 'TH') {
         const newSortColumn = target.getAttribute('data-sort');
         
         if (newSortColumn === sortColumn) {
-            // Toggle direction if clicking the same column
             sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
         } else {
-            // New column clicked, set to ascending
             sortColumn = newSortColumn;
             sortDirection = 'asc';
         }
@@ -401,32 +435,127 @@ document.getElementById('passwordTable').addEventListener('click', function(even
     }
 });
 
-function sortAndRenderPasswords() {
-    // 1. Sort the global array (currentPasswords)
-    currentPasswords.sort((a, b) => {
-        const valA = a[sortColumn].toLowerCase();
-        const valB = b[sortColumn].toLowerCase();
+document.getElementById('searchBar').addEventListener('keyup', function() {
+    filterPasswords(this.value);
+});
 
-        let comparison = 0;
-        if (valA > valB) {
-            comparison = 1;
-        } else if (valA < valB) {
-            comparison = -1;
-        }
 
-        // Apply sort direction
-        return sortDirection === 'desc' ? comparison * -1 : comparison;
-    });
+// ------------------------------------------------------------------
+// --- INITIALIZATION & MODAL EVENT LISTENERS ---
+// ------------------------------------------------------------------
 
-    // 2. Re-render the table with the sorted data
-    renderPasswords(currentPasswords);
-}
-
-// Initial step: Open the database and then load the passwords
 window.onload = () => {
     openDB()
         .then(() => {
             loadPasswords();
+
+            // --- 1. CLEAR MODAL LOGIC (Elements queried here to ensure DOM readiness) ---
+            const clearModal = document.getElementById('clearModal');
+            const modalConfirm = document.getElementById('modalConfirm');
+            const modalCancel = document.getElementById('modalCancel');
+
+            function hideClearModal() {
+                if (clearModal) {
+                    clearModal.classList.remove('show');
+                    clearModal.classList.remove('d-block');
+                    isAwaitingConfirmation = false;
+                }
+            }
+
+            if (clearModal && modalConfirm && modalCancel) {
+                modalConfirm.addEventListener('click', function() {
+                    if (isAwaitingConfirmation) {
+                        executeClearAll(); 
+                        hideClearModal();
+                    }
+                });
+                modalCancel.addEventListener('click', hideClearModal);
+                clearModal.querySelector('.btn-close').addEventListener('click', hideClearModal);
+            }
+
+
+            // --- 2. EDIT MODAL LOGIC (Elements queried here to ensure DOM readiness) ---
+            editModal = document.getElementById('editModal');
+            editUsernameInput = document.getElementById('editUsername');
+            editPasswordInput = document.getElementById('editPassword');
+            editWebsiteSpan = document.getElementById('editModalWebsite');
+            editEntryIdInput = document.getElementById('editEntryId');
+            const editSaveButton = document.getElementById('editSave');
+            const editCancelButton = document.getElementById('editCancel');
+            const toggleEditPasswordButton = document.getElementById('toggleEditPassword');
+            const editCloseButton = editModal ? editModal.querySelector('.btn-close') : null;
+            
+            function hideEditModal() {
+                if(editModal) {
+                    editModal.classList.remove('show');
+                    editModal.classList.remove('d-block');
+                }
+            }
+
+            // A. Password Toggle Listener for Edit Modal
+            if (toggleEditPasswordButton) {
+                toggleEditPasswordButton.addEventListener('click', function(event) {
+                    event.preventDefault(); 
+                    const icon = this.querySelector('i');
+                    if (editPasswordInput.type === 'password') {
+                        editPasswordInput.type = 'text';
+                        icon.classList.remove('fa-eye');
+                        icon.classList.add('fa-eye-slash');
+                    } else {
+                        editPasswordInput.type = 'password';
+                        icon.classList.remove('fa-eye-slash');
+                        icon.classList.add('fa-eye');
+                    }
+                });
+            }
+
+            // B. Save Changes Listener
+            if (editSaveButton) {
+                editSaveButton.addEventListener('click', function() {
+                    const id = parseInt(editEntryIdInput.value);
+                    const originalEntry = currentPasswords.find(p => p.id === id);
+                    
+                    if (!originalEntry) {
+                        alert("Error: Entry ID not found for saving.");
+                        return;
+                    }
+
+                    const newUsername = editUsernameInput.value.trim();
+                    const newPassword = editPasswordInput.value;
+                    
+                    // Check if values were actually changed
+                    if (newUsername === originalEntry.username && newPassword === originalEntry.password) {
+                        alert("No changes were made.");
+                        hideEditModal();
+                        return;
+                    }
+                    
+                    if (newUsername && newPassword) {
+                        const updatedEntry = {
+                            ...originalEntry, 
+                            username: newUsername,
+                            password: newPassword,
+                        };
+                        updatePassword(updatedEntry);
+                        hideEditModal();
+                    } else {
+                        alert("Username and Password cannot be empty.");
+                    }
+                });
+            }
+            
+            // C. Cancel/Close Listeners
+            if (editCancelButton) editCancelButton.addEventListener('click', hideEditModal);
+            if (editCloseButton) editCloseButton.addEventListener('click', hideEditModal); // X button
+            
+            // D. Global Click Listener to close ANY open modal when clicking the backdrop
+            window.addEventListener('click', function(event) {
+                if (event.target.classList.contains('modal')) {
+                    hideClearModal();
+                    hideEditModal();
+                }
+            });
+
         })
         .catch(err => {
             console.error("Failed to initialize application:", err);

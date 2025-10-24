@@ -10,7 +10,7 @@ let sortColumn = 'website';
 let sortDirection = 'asc';
 let isAwaitingConfirmation = false; // Global flag for modal state
 
-// --- Global Edit Modal Element References (Initialized later in window.onload) ---
+// --- Global Edit Modal Element References (Initialized later in initApp) ---
 let editModal, editUsernameInput, editPasswordInput, editWebsiteSpan, editEntryIdInput;
 
 /**
@@ -21,20 +21,14 @@ function openDB() {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
 
         request.onerror = (event) => {
-            console.error("IndexedDB error:", event.target.errorCode);
+            console.error("IndexedDB error:", event.target?.errorCode || event);
             alert("Error opening database. Check console for details.");
-            reject(event.target.errorCode);
+            reject(event?.target?.errorCode || event);
         };
 
         request.onsuccess = (event) => {
             db = event.target.result;
             console.log("Database opened successfully.");
-            
-            // Enable the button after DB connection is established
-            const saveButton = document.getElementById('saveButton');
-            saveButton.disabled = false;
-            saveButton.textContent = 'Save Password';
-            
             resolve(db);
         };
 
@@ -67,7 +61,7 @@ function loadPasswords() {
     const request = store.getAll();
 
     request.onsuccess = (event) => {
-        currentPasswords = event.target.result;
+        currentPasswords = event.target.result || [];
         sortAndRenderPasswords(); // Use the sorted version after initial load
     };
 
@@ -94,13 +88,17 @@ function addPassword(entry) {
         sortAndRenderPasswords(); 
         
         // Clear inputs after successful save
-        document.getElementById('website').value = '';
-        document.getElementById('username').value = '';
-        document.getElementById('password').value = '';
+        const websiteEl = document.getElementById('website');
+        const usernameEl = document.getElementById('username');
+        const passwordEl = document.getElementById('password');
+        if (websiteEl) websiteEl.value = '';
+        if (usernameEl) usernameEl.value = '';
+        if (passwordEl) passwordEl.value = '';
     };
 
     request.onerror = (event) => {
         console.error("Error saving password:", event.target.errorCode);
+        alert("Failed to save password. Check console for details.");
     };
 }
 
@@ -114,7 +112,7 @@ function deletePassword(idToDelete) {
     const index = currentPasswords.findIndex(p => p.id === idToDelete);
     if (index !== -1) {
         currentPasswords.splice(index, 1); 
-        const row = document.querySelector(`.delete-btn[data-id="${idToDelete}"]`).closest('tr');
+        const row = document.querySelector(`.delete-btn[data-id="${idToDelete}"]`)?.closest('tr');
         if (row) row.remove(); // Remove row from DOM
     }
 
@@ -221,19 +219,53 @@ function exportPasswords() {
     link.href = url;
     link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.json`;
     document.body.appendChild(link);
-    link.click();
+    try {
+        link.click();
+    } catch (err) {
+        window.open(url, '_blank');
+    }
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 }
 
 /**
+ * Helper: create an off-screen file input at runtime and trigger it.
+ * This avoids relying on a pre-existing hidden input (some browsers/shields block clicks on display:none inputs).
+ * onChangeHandler will receive the native input event.
+ */
+function createAndTriggerFileInput(accept, onChangeHandler) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept || '';
+    // Keep it focusable but off-screen to avoid some browsers blocking programmatic clicks
+    input.style.position = 'fixed';
+    input.style.left = '-10000px';
+    document.body.appendChild(input);
+
+    const cleanup = () => {
+        // small timeout to ensure the change event is fully processed
+        setTimeout(() => {
+            if (input && input.parentNode) input.parentNode.removeChild(input);
+        }, 0);
+    };
+
+    input.addEventListener('change', (event) => {
+        try {
+            onChangeHandler(event);
+        } finally {
+            cleanup();
+        }
+    }, { once: true });
+
+    // Attempt to open the file dialog. This should be called from a user gesture (button click).
+    input.click();
+}
+
+/**
  * Handles the import of passwords from a file.
  */
-function importPasswords(event, format) {
-    const file = event.target.files[0];
-    if (!file) {
-        return;
-    }
+function importPasswordsFromEvent(file, format) {
+    if (!file) return;
 
     const reader = new FileReader();
     reader.onload = function(e) {
@@ -247,15 +279,13 @@ function importPasswords(event, format) {
 
             if (Array.isArray(importedPasswords)) {
                 // Basic validation of the imported data
-                const validPasswords = importedPasswords.filter(p => p.website && p.username && p.password);
+                const validPasswords = importedPasswords.filter(p => p && p.website && p.username && p.password);
 
                 if (validPasswords.length > 0) {
                     const transaction = db.transaction([STORE_NAME], 'readwrite');
                     const store = transaction.objectStore(STORE_NAME);
 
                     validPasswords.forEach(password => {
-                        // To avoid duplicates, we can check if a password with the same website and username already exists.
-                        // For simplicity here, we'll just add them. A more robust solution might involve checking for duplicates.
                         store.add(password);
                     });
 
@@ -280,27 +310,74 @@ function importPasswords(event, format) {
         }
     };
     reader.readAsText(file);
-
-    // Reset the file input so the same file can be selected again
-    event.target.value = null;
 }
 
 /**
  * Parses a CSV string into an array of password objects.
+ * Robust basic CSV parser: handles CRLF/LF, quoted fields, and escaped quotes.
  */
 function parseCSV(csv) {
-    const lines = csv.split('\n');
-    const headers = lines[0].split(',').map(h => h.trim());
+    if (!csv) return [];
+
+    // Normalize line endings
+    const normalized = csv.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    // Split but keep empty lines for potential quoted newlines handling later; we'll filter empty rows after parse
+    const lines = normalized.split('\n');
+
+    // A parser that handles quoted fields and commas inside quotes
+    const parseRow = (row) => {
+        const fields = [];
+        let cur = '';
+        let inQuotes = false;
+        for (let i = 0; i < row.length; i++) {
+            const ch = row[i];
+            if (inQuotes) {
+                if (ch === '"') {
+                    if (row[i + 1] === '"') { // escaped quote
+                        cur += '"';
+                        i++;
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    cur += ch;
+                }
+            } else {
+                if (ch === '"') {
+                    inQuotes = true;
+                } else if (ch === ',') {
+                    fields.push(cur);
+                    cur = '';
+                } else {
+                    cur += ch;
+                }
+            }
+        }
+        fields.push(cur);
+        return fields;
+    };
+
+    // find first non-empty line as header (skip empty or whitespace-only lines)
+    let headerLineIndex = 0;
+    while (headerLineIndex < lines.length && lines[headerLineIndex].trim() === '') headerLineIndex++;
+    if (headerLineIndex >= lines.length) return [];
+
+    const headers = parseRow(lines[headerLineIndex]).map(h => h.trim());
     const passwords = [];
 
-    for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(',').map(v => v.trim());
+    for (let i = headerLineIndex + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.trim() === '') continue; // skip empty lines
+        const values = parseRow(line);
         if (values.length === headers.length) {
-            const password = {};
+            const obj = {};
             for (let j = 0; j < headers.length; j++) {
-                password[headers[j]] = values[j];
+                obj[headers[j]] = values[j];
             }
-            passwords.push(password);
+            passwords.push(obj);
+        } else {
+            // If a line didn't match header length, attempt to join subsequent lines (rare) or skip and log
+            console.warn('Skipped malformed CSV line (column mismatch):', line);
         }
     }
 
@@ -308,7 +385,19 @@ function parseCSV(csv) {
 }
 
 /**
- * Exports all passwords to a CSV file.
+ * Escapes a CSV cell value per RFC4180 and returns a string.
+ */
+function csvEscape(value) {
+    if (value === null || value === undefined) return '';
+    const s = String(value);
+    if (s.includes('"') || s.includes(',') || s.includes('\n')) {
+        return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+}
+
+/**
+ * Exports all passwords to a CSV file (more robust quoting).
  */
 function exportToCSV() {
     if (currentPasswords.length === 0) {
@@ -317,10 +406,13 @@ function exportToCSV() {
     }
 
     const headers = ['website', 'username', 'password'];
-    const csv = [
-        headers.join(','),
-        ...currentPasswords.map(row => headers.map(fieldName => JSON.stringify(row[fieldName])).join(','))
-    ].join('\r\n');
+    const csvRows = [];
+    csvRows.push(headers.join(','));
+    currentPasswords.forEach(row => {
+        const r = headers.map(fieldName => csvEscape(row[fieldName]));
+        csvRows.push(r.join(','));
+    });
+    const csv = csvRows.join('\r\n');
 
     const dataBlob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(dataBlob);
@@ -328,7 +420,14 @@ function exportToCSV() {
     link.href = url;
     link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(link);
-    link.click();
+
+    try {
+        link.click();
+    } catch (err) {
+        // fallback: open the blob URL in a new tab so user can manually save it
+        window.open(url, '_blank');
+    }
+
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 }
@@ -354,9 +453,11 @@ function editEntry(idToEdit) {
     editEntryIdInput.value = entry.id;
 
     editPasswordInput.type = 'password';
-    const toggleIcon = document.getElementById('toggleEditPassword').querySelector('i');
-    toggleIcon.classList.remove('fa-eye-slash');
-    toggleIcon.classList.add('fa-eye');
+    const toggleIcon = document.getElementById('toggleEditPassword')?.querySelector('i');
+    if (toggleIcon) {
+        toggleIcon.classList.remove('fa-eye-slash');
+        toggleIcon.classList.add('fa-eye');
+    }
 
     editModal.classList.add('show');
     editModal.classList.add('d-block');
@@ -390,9 +491,10 @@ function updateTableRow(entry) {
  */
 function renderPasswords(passwords) {
     const tableBody = document.getElementById('passwordTableBody');
+    if (!tableBody) return;
     tableBody.innerHTML = ''; 
 
-    if (passwords.length === 0) {
+    if (!passwords || passwords.length === 0) {
         const emptyRow = tableBody.insertRow();
         const cell = emptyRow.insertCell();
         cell.colSpan = 4;
@@ -403,16 +505,16 @@ function renderPasswords(passwords) {
 
     passwords.forEach((entry) => {
         const row = tableBody.insertRow();
-        const maskedPassword = '*'.repeat(entry.password.length);
+        const maskedPassword = '*'.repeat((entry.password || '').length);
 
         // 1. Website Cell 
         const websiteCell = row.insertCell();
-        websiteCell.textContent = entry.website;
+        websiteCell.textContent = entry.website || '';
         websiteCell.setAttribute('data-label', 'Website');
 
         // 2. Username Cell
         const usernameCell = row.insertCell();
-        usernameCell.textContent = entry.username;
+        usernameCell.textContent = entry.username || '';
         usernameCell.setAttribute('data-label', 'Username');
 
         // 3. Password Cell (Interactive)
@@ -436,8 +538,6 @@ function renderPasswords(passwords) {
     });
 
     // --- Attach Listeners to newly created table rows ---
-    // These listeners MUST be attached every time the table is re-rendered.
-
     tableBody.querySelectorAll('.password-display').forEach(span => {
         span.addEventListener('click', function() {
             const id = parseInt(this.getAttribute('data-id'));
@@ -468,7 +568,7 @@ function renderPasswords(passwords) {
  * @param {string} searchTerm 
  */
 function filterPasswords(searchTerm) {
-    const term = searchTerm.toLowerCase().trim();
+    const term = (searchTerm || '').toLowerCase().trim();
     
     if (term === '') {
         sortAndRenderPasswords();
@@ -476,8 +576,8 @@ function filterPasswords(searchTerm) {
     }
 
     const filteredList = currentPasswords.filter(entry => 
-        entry.website.toLowerCase().includes(term) ||
-        entry.username.toLowerCase().includes(term)
+        (entry.website || '').toLowerCase().includes(term) ||
+        (entry.username || '').toLowerCase().includes(term)
     );
 
     renderPasswords(filteredList);
@@ -487,11 +587,12 @@ function filterPasswords(searchTerm) {
  * Function to toggle saved password visibility in the table.
  */
 function togglePasswordVisibility(spanElement, realPassword) {
-    if (spanElement.textContent.includes('*')) {
+    if (!spanElement) return;
+    if ((spanElement.textContent || '').includes('*')) {
         spanElement.textContent = realPassword;
         spanElement.style.color = 'red';
     } else {
-        spanElement.textContent = '*'.repeat(realPassword.length);
+        spanElement.textContent = '*'.repeat((realPassword || '').length);
         spanElement.style.color = '#007bff';
     }
 }
@@ -500,10 +601,10 @@ function togglePasswordVisibility(spanElement, realPassword) {
  * Handles table sorting logic.
  */
 function sortAndRenderPasswords() {
-    // We already have the currentPasswords globally. No need to pass it again.
+    // Ensure values are strings before comparing
     currentPasswords.sort((a, b) => {
-        const valA = a[sortColumn].toLowerCase();
-        const valB = b[sortColumn].toLowerCase();
+        const valA = ((a[sortColumn] || '') + '').toLowerCase();
+        const valB = ((b[sortColumn] || '') + '').toLowerCase();
 
         let comparison = 0;
         if (valA > valB) { comparison = 1; } 
@@ -517,211 +618,244 @@ function sortAndRenderPasswords() {
 }
 
 // ------------------------------------------------------------------
-// --- GLOBAL EVENT LISTENERS (Form/Search/Table Headers) ---
+// --- EVENT LISTENER SETUP (moved inside init to avoid DOM timing issues) ---
 // ------------------------------------------------------------------
+function setupEventListeners() {
+    // Save Button
+    const saveButton = document.getElementById('saveButton');
+    if (saveButton) {
+        saveButton.disabled = false;
+        saveButton.textContent = 'Save Password';
+        saveButton.addEventListener('click', function() {
+            if (!db) {
+                alert('Database is still loading. Please wait a moment and try again.');
+                return; 
+            }
+            
+            const website = document.getElementById('website')?.value.trim();
+            const username = document.getElementById('username')?.value.trim();
+            const password = document.getElementById('password')?.value;
 
-document.getElementById('saveButton').addEventListener('click', function() {
-    if (!db) {
-        alert('Database is still loading. Please wait a moment and try again.');
-        return; 
+            if (website && username && password) {
+                const newEntry = { website, username, password, createdAt: new Date() };
+                addPassword(newEntry);
+            } else {
+                alert('Please fill out all fields.');
+            }
+        });
+    }
+
+    // Clear Button
+    const clearButton = document.getElementById('clearButton');
+    if (clearButton) clearButton.addEventListener('click', clearAllPasswords);
+
+    // Toggle password input visibility on add form
+    const togglePassword = document.getElementById('togglePassword');
+    if (togglePassword) {
+        togglePassword.addEventListener('click', function(event) {
+            event.preventDefault(); 
+            const passwordInput = document.getElementById('password');
+            if (!passwordInput) return;
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                this.textContent = 'Hide';
+            } else {
+                passwordInput.type = 'password';
+                this.textContent = 'Show';
+            }
+        });
+    }
+
+    // Table header sorting
+    const passwordTable = document.getElementById('passwordTable');
+    if (passwordTable) {
+        passwordTable.addEventListener('click', function(event) {
+            const target = event.target;
+            if (target && target.tagName === 'TH') {
+                const newSortColumn = target.getAttribute('data-sort');
+                if (!newSortColumn) return;
+                
+                if (newSortColumn === sortColumn) {
+                    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortColumn = newSortColumn;
+                    sortDirection = 'asc';
+                }
+                
+                sortAndRenderPasswords();
+            }
+        });
+    }
+
+    // Search bar
+    const searchBar = document.getElementById('searchBar');
+    if (searchBar) {
+        searchBar.addEventListener('keyup', function() {
+            filterPasswords(this.value);
+        });
+    }
+
+    // Clear modal buttons (confirm/cancel) - ensure modal elements are present
+    const clearModal = document.getElementById('clearModal');
+    const modalConfirm = document.getElementById('modalConfirm');
+    const modalCancel = document.getElementById('modalCancel');
+
+    function hideClearModal() {
+        if (clearModal) {
+            clearModal.classList.remove('show');
+            clearModal.classList.remove('d-block');
+            isAwaitingConfirmation = false;
+        }
+    }
+
+    if (clearModal && modalConfirm && modalCancel) {
+        modalConfirm.addEventListener('click', function() {
+            if (isAwaitingConfirmation) {
+                executeClearAll(); 
+                hideClearModal();
+            }
+        });
+        modalCancel.addEventListener('click', hideClearModal);
+        const btnClose = clearModal.querySelector('.btn-close');
+        if (btnClose) btnClose.addEventListener('click', hideClearModal);
+    }
+
+    // Edit modal elements
+    editModal = document.getElementById('editModal');
+    editUsernameInput = document.getElementById('editUsername');
+    editPasswordInput = document.getElementById('editPassword');
+    editWebsiteSpan = document.getElementById('editModalWebsite');
+    editEntryIdInput = document.getElementById('editEntryId');
+    const editSaveButton = document.getElementById('editSave');
+    const editCancelButton = document.getElementById('editCancel');
+    const toggleEditPasswordButton = document.getElementById('toggleEditPassword');
+    const editCloseButton = editModal ? editModal.querySelector('.btn-close') : null;
+    
+    function hideEditModal() {
+        if(editModal) {
+            editModal.classList.remove('show');
+            editModal.classList.remove('d-block');
+        }
+    }
+
+    // A. Password Toggle Listener for Edit Modal
+    if (toggleEditPasswordButton) {
+        toggleEditPasswordButton.addEventListener('click', function(event) {
+            event.preventDefault(); 
+            const icon = this.querySelector('i');
+            if (!editPasswordInput) return;
+            if (editPasswordInput.type === 'password') {
+                editPasswordInput.type = 'text';
+                if (icon) { icon.classList.remove('fa-eye'); icon.classList.add('fa-eye-slash'); }
+            } else {
+                editPasswordInput.type = 'password';
+                if (icon) { icon.classList.remove('fa-eye-slash'); icon.classList.add('fa-eye'); }
+            }
+        });
+    }
+
+    // B. Save Changes Listener
+    if (editSaveButton) {
+        editSaveButton.addEventListener('click', function() {
+            const id = parseInt(editEntryIdInput.value);
+            const originalEntry = currentPasswords.find(p => p.id === id);
+            
+            if (!originalEntry) {
+                alert("Error: Entry ID not found for saving.");
+                return;
+            }
+
+            const newUsername = editUsernameInput.value.trim();
+            const newPassword = editPasswordInput.value;
+            
+            // Check if values were actually changed
+            if (newUsername === originalEntry.username && newPassword === originalEntry.password) {
+                alert("No changes were made.");
+                hideEditModal();
+                return;
+            }
+            
+            if (newUsername && newPassword) {
+                const updatedEntry = {
+                    ...originalEntry, 
+                    username: newUsername,
+                    password: newPassword,
+                };
+                updatePassword(updatedEntry);
+                hideEditModal();
+            } else {
+                alert("Username and Password cannot be empty.");
+            }
+        });
     }
     
-    const website = document.getElementById('website').value.trim();
-    const username = document.getElementById('username').value.trim();
-    const password = document.getElementById('password').value;
-
-    if (website && username && password) {
-        const newEntry = { website, username, password, createdAt: new Date() };
-        addPassword(newEntry);
-    } else {
-        alert('Please fill out all fields.');
-    }
-});
-
-document.getElementById('clearButton').addEventListener('click', clearAllPasswords);
-
-document.getElementById('togglePassword').addEventListener('click', function(event) {
-    event.preventDefault(); 
-    const passwordInput = document.getElementById('password');
-    if (passwordInput.type === 'password') {
-        passwordInput.type = 'text';
-        this.textContent = 'Hide';
-    } else {
-        passwordInput.type = 'password';
-        this.textContent = 'Show';
-    }
-});
-
-document.getElementById('passwordTable').addEventListener('click', function(event) {
-    const target = event.target;
-    if (target.tagName === 'TH') {
-        const newSortColumn = target.getAttribute('data-sort');
-        
-        if (newSortColumn === sortColumn) {
-            sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
-        } else {
-            sortColumn = newSortColumn;
-            sortDirection = 'asc';
+    // C. Cancel/Close Listeners
+    if (editCancelButton) editCancelButton.addEventListener('click', hideEditModal);
+    if (editCloseButton) editCloseButton.addEventListener('click', hideEditModal); // X button
+    
+    // D. Global Click Listener to close ANY open modal when clicking the backdrop
+    window.addEventListener('click', function(event) {
+        if (event.target.classList && event.target.classList.contains('modal')) {
+            if (clearModal) hideClearModal();
+            if (editModal) hideEditModal();
         }
-        
-        sortAndRenderPasswords();
+    });
+
+    // --- IMPORT/EXPORT BUTTONS ---
+    const importButton = document.getElementById('importButton');
+    const exportButton = document.getElementById('exportButton');
+    const csvImportButton = document.getElementById('csvImportButton');
+    const csvExportButton = document.getElementById('csvExportButton');
+
+    if (importButton) {
+        importButton.addEventListener('click', () => {
+            // create input dynamically to avoid Brave/extension blocking issues with hidden inputs
+            createAndTriggerFileInput('.json', (ev) => {
+                const file = ev.target.files && ev.target.files[0];
+                importPasswordsFromEvent(file, 'json');
+            });
+        });
     }
-});
 
-document.getElementById('searchBar').addEventListener('keyup', function() {
-    filterPasswords(this.value);
-});
+    if (csvImportButton) {
+        csvImportButton.addEventListener('click', () => {
+            createAndTriggerFileInput('.csv', (ev) => {
+                const file = ev.target.files && ev.target.files[0];
+                importPasswordsFromEvent(file, 'csv');
+            });
+        });
+    }
 
+    if (exportButton) {
+        exportButton.addEventListener('click', exportPasswords);
+    }
+
+    if (csvExportButton) {
+        csvExportButton.addEventListener('click', exportToCSV);
+    }
+}
 
 // ------------------------------------------------------------------
-// --- INITIALIZATION & MODAL EVENT LISTENERS ---
+// --- INITIALIZATION & DB OPENING ---
 // ------------------------------------------------------------------
 
-window.onload = () => {
+function initApp() {
+    // open DB first, then setup UI and listeners
     openDB()
         .then(() => {
+            setupEventListeners();
             loadPasswords();
-
-            // --- 1. CLEAR MODAL LOGIC (Elements queried here to ensure DOM readiness) ---
-            const clearModal = document.getElementById('clearModal');
-            const modalConfirm = document.getElementById('modalConfirm');
-            const modalCancel = document.getElementById('modalCancel');
-
-            function hideClearModal() {
-                if (clearModal) {
-                    clearModal.classList.remove('show');
-                    clearModal.classList.remove('d-block');
-                    isAwaitingConfirmation = false;
-                }
-            }
-
-            if (clearModal && modalConfirm && modalCancel) {
-                modalConfirm.addEventListener('click', function() {
-                    if (isAwaitingConfirmation) {
-                        executeClearAll(); 
-                        hideClearModal();
-                    }
-                });
-                modalCancel.addEventListener('click', hideClearModal);
-                clearModal.querySelector('.btn-close').addEventListener('click', hideClearModal);
-            }
-
-
-            // --- 2. EDIT MODAL LOGIC (Elements queried here to ensure DOM readiness) ---
-            editModal = document.getElementById('editModal');
-            editUsernameInput = document.getElementById('editUsername');
-            editPasswordInput = document.getElementById('editPassword');
-            editWebsiteSpan = document.getElementById('editModalWebsite');
-            editEntryIdInput = document.getElementById('editEntryId');
-            const editSaveButton = document.getElementById('editSave');
-            const editCancelButton = document.getElementById('editCancel');
-            const toggleEditPasswordButton = document.getElementById('toggleEditPassword');
-            const editCloseButton = editModal ? editModal.querySelector('.btn-close') : null;
-            
-            function hideEditModal() {
-                if(editModal) {
-                    editModal.classList.remove('show');
-                    editModal.classList.remove('d-block');
-                }
-            }
-
-            // A. Password Toggle Listener for Edit Modal
-            if (toggleEditPasswordButton) {
-                toggleEditPasswordButton.addEventListener('click', function(event) {
-                    event.preventDefault(); 
-                    const icon = this.querySelector('i');
-                    if (editPasswordInput.type === 'password') {
-                        editPasswordInput.type = 'text';
-                        icon.classList.remove('fa-eye');
-                        icon.classList.add('fa-eye-slash');
-                    } else {
-                        editPasswordInput.type = 'password';
-                        icon.classList.remove('fa-eye-slash');
-                        icon.classList.add('fa-eye');
-                    }
-                });
-            }
-
-            // B. Save Changes Listener
-            if (editSaveButton) {
-                editSaveButton.addEventListener('click', function() {
-                    const id = parseInt(editEntryIdInput.value);
-                    const originalEntry = currentPasswords.find(p => p.id === id);
-                    
-                    if (!originalEntry) {
-                        alert("Error: Entry ID not found for saving.");
-                        return;
-                    }
-
-                    const newUsername = editUsernameInput.value.trim();
-                    const newPassword = editPasswordInput.value;
-                    
-                    // Check if values were actually changed
-                    if (newUsername === originalEntry.username && newPassword === originalEntry.password) {
-                        alert("No changes were made.");
-                        hideEditModal();
-                        return;
-                    }
-                    
-                    if (newUsername && newPassword) {
-                        const updatedEntry = {
-                            ...originalEntry, 
-                            username: newUsername,
-                            password: newPassword,
-                        };
-                        updatePassword(updatedEntry);
-                        hideEditModal();
-                    } else {
-                        alert("Username and Password cannot be empty.");
-                    }
-                });
-            }
-            
-            // C. Cancel/Close Listeners
-            if (editCancelButton) editCancelButton.addEventListener('click', hideEditModal);
-            if (editCloseButton) editCloseButton.addEventListener('click', hideEditModal); // X button
-            
-            // D. Global Click Listener to close ANY open modal when clicking the backdrop
-            window.addEventListener('click', function(event) {
-                if (event.target.classList.contains('modal')) {
-                    hideClearModal();
-                    hideEditModal();
-                }
-            });
-
-            // --- 3. IMPORT/EXPORT EVENT LISTENERS ---
-            const importButton = document.getElementById('importButton');
-            const exportButton = document.getElementById('exportButton');
-            const importFileInput = document.getElementById('importFile');
-            const csvImportButton = document.getElementById('csvImportButton');
-            const csvExportButton = document.getElementById('csvExportButton');
-
-            if (importButton) {
-                importButton.addEventListener('click', () => {
-                    importFileInput.accept = '.json';
-                    importFileInput.onchange = (event) => importPasswords(event, 'json');
-                    importFileInput.click();
-                });
-            }
-
-            if (csvImportButton) {
-                csvImportButton.addEventListener('click', () => {
-                    importFileInput.accept = '.csv';
-                    importFileInput.onchange = (event) => importPasswords(event, 'csv');
-                    importFileInput.click();
-                });
-            }
-
-            if (exportButton) {
-                exportButton.addEventListener('click', exportPasswords);
-            }
-
-            if (csvExportButton) {
-                csvExportButton.addEventListener('click', exportToCSV);
-            }
-
         })
         .catch(err => {
             console.error("Failed to initialize application:", err);
+            alert("Initialization failed. Check the console for details.");
         });
-};
+}
+
+// Use DOMContentLoaded so the script can be loaded in head safely
+if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', initApp);
+} else {
+    // already loaded
+    initApp();
+}

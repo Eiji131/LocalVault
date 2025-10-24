@@ -539,6 +539,9 @@ function renderPasswords(passwords) {
             <button class="btn btn-sm btn-outline-primary edit-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Edit">
                 <i class="fas fa-pencil-alt"></i>
             </button>
+            <button class="btn btn-sm btn-outline-secondary copy-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Copy Password">
+                <i class="fas fa-copy"></i>
+            </button>
             <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Delete">
                 <i class="fas fa-trash-alt"></i>
             </button>
@@ -568,6 +571,33 @@ function renderPasswords(passwords) {
         button.addEventListener('click', function() {
              const idToDelete = parseInt(this.getAttribute('data-id'));
              deletePassword(idToDelete);
+        });
+    });
+
+    // Copy button listeners (copies the real password to clipboard)
+    tableBody.querySelectorAll('.copy-btn').forEach(button => {
+        button.addEventListener('click', function(event) {
+            event.stopPropagation();
+            const id = parseInt(this.getAttribute('data-id'));
+            const entry = currentPasswords.find(p => p.id === id);
+            if (!entry) return;
+
+            const btn = this;
+            const originalHTML = btn.innerHTML;
+
+            // attempt navigator.clipboard first
+            const copyText = entry.password || '';
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(copyText).then(() => {
+                    btn.innerHTML = '<i class="fas fa-check"></i>';
+                    setTimeout(() => btn.innerHTML = originalHTML, 1200);
+                }).catch(err => {
+                    // fallback to older execCommand
+                    fallbackCopyTextToClipboard(copyText, btn, originalHTML);
+                });
+            } else {
+                fallbackCopyTextToClipboard(copyText, btn, originalHTML);
+            }
         });
     });
 }
@@ -885,4 +915,32 @@ if (document.readyState === 'loading') {
     // already loaded
     initApp();
 
+}
+
+/**
+ * Fallback copy implementation using an offscreen textarea and document.execCommand('copy').
+ * Provides visual feedback on the button passed.
+ */
+function fallbackCopyTextToClipboard(text, btn, originalHTML) {
+    try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        // avoid scrolling to bottom
+        textarea.style.position = 'fixed';
+        textarea.style.top = '-10000px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const successful = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (successful) {
+            btn.innerHTML = '<i class="fas fa-check"></i>';
+            setTimeout(() => btn.innerHTML = originalHTML, 1200);
+        } else {
+            alert('Copy failed. Please select the password manually and copy.');
+        }
+    } catch (err) {
+        console.error('Fallback copy failed', err);
+        alert('Copy failed. Your browser may not support programmatic clipboard access.');
+    }
 }

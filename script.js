@@ -93,7 +93,14 @@ function addPassword(entry) {
         const passwordEl = document.getElementById('password');
         if (websiteEl) websiteEl.value = '';
         if (usernameEl) usernameEl.value = '';
-        if (passwordEl) passwordEl.value = '';
+        if (passwordEl) {
+            passwordEl.value = '';
+            // reset color in case it was revealed
+            passwordEl.style.color = '';
+            passwordEl.type = 'password';
+            const toggleEl = document.getElementById('togglePassword');
+            if (toggleEl) toggleEl.textContent = 'Show';
+        }
     };
 
     request.onerror = (event) => {
@@ -452,7 +459,9 @@ function editEntry(idToEdit) {
     editPasswordInput.value = entry.password;
     editEntryIdInput.value = entry.id;
 
+    // Ensure hidden and default color when opening
     editPasswordInput.type = 'password';
+    editPasswordInput.style.color = ''; // reset any previous reveal color
     const toggleIcon = document.getElementById('toggleEditPassword')?.querySelector('i');
     if (toggleIcon) {
         toggleIcon.classList.remove('fa-eye-slash');
@@ -590,9 +599,11 @@ function togglePasswordVisibility(spanElement, realPassword) {
     if (!spanElement) return;
     if ((spanElement.textContent || '').includes('*')) {
         spanElement.textContent = realPassword;
-        spanElement.style.color = 'red';
+        // Make revealed password green
+        spanElement.style.color = '#28a745';
     } else {
         spanElement.textContent = '*'.repeat((realPassword || '').length);
+        // Restore masked color
         spanElement.style.color = '#007bff';
     }
 }
@@ -659,9 +670,13 @@ function setupEventListeners() {
             if (passwordInput.type === 'password') {
                 passwordInput.type = 'text';
                 this.textContent = 'Hide';
+                // Make revealed password green
+                passwordInput.style.color = '#28a745';
             } else {
                 passwordInput.type = 'password';
                 this.textContent = 'Show';
+                // Reset color when hidden
+                passwordInput.style.color = '';
             }
         });
     }
@@ -736,6 +751,13 @@ function setupEventListeners() {
             editModal.classList.remove('show');
             editModal.classList.remove('d-block');
         }
+        // Reset edit password input color when closing
+        if (editPasswordInput) {
+            editPasswordInput.style.color = '';
+            editPasswordInput.type = 'password';
+            const icon = document.getElementById('toggleEditPassword')?.querySelector('i');
+            if (icon) { icon.classList.remove('fa-eye-slash'); icon.classList.add('fa-eye'); }
+        }
     }
 
     // A. Password Toggle Listener for Edit Modal
@@ -746,9 +768,13 @@ function setupEventListeners() {
             if (!editPasswordInput) return;
             if (editPasswordInput.type === 'password') {
                 editPasswordInput.type = 'text';
+                // Make revealed edit password green
+                editPasswordInput.style.color = '#28a745';
                 if (icon) { icon.classList.remove('fa-eye'); icon.classList.add('fa-eye-slash'); }
             } else {
                 editPasswordInput.type = 'password';
+                // Reset color when hidden
+                editPasswordInput.style.color = '';
                 if (icon) { icon.classList.remove('fa-eye-slash'); icon.classList.add('fa-eye'); }
             }
         });
@@ -858,4 +884,5 @@ if (document.readyState === 'loading') {
 } else {
     // already loaded
     initApp();
+
 }

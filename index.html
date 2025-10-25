@@ -16,7 +16,10 @@
 <body class="dark-theme">
     <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
         <div class="container-fluid">
-            <a class="navbar-brand">
+                <a class="navbar-brand" id="brand" role="button" tabindex="0"
+                    data-bs-toggle="popover" data-bs-trigger="hover focus" data-bs-placement="bottom"
+                    title="About this app"
+                    data-bs-content="Local Password Vault stores your passwords only in this browser. Data never leaves your device and there is no server-side sync or transmission over the internet.">
                 <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMCIgaGVpZ2h0PSIzMCIgZmlsbD0id2hpdGUiIGNsYXNzPSJiaSBiaS1zaGllbGQtbG9jayIgdmlld0JveD0iMCAwIDE2IDE2Ij4gPHBhdGggZD0iTTUuMzM4IDEuNTlhNjEgNjEgMCAwIDAtMi44MzcuODU2LjQ4LjQ4IDAgMCAwLS4zMjguMzljLS41NTQgNC4xNTcuNzI2IDcuMTkgMi4yNTMgOS4xODhhMTAuNyAxMCAwIDAgMCAyLjI4NyAyLjIzM2MuMzQ2LjI0NC42NTIuNDIuODkzLjUzM3EuMTguMDg1LjI5My4xMThhMSAxIDAgMCAwIC4xMDEuMDI1IDEgMSAwIDAgMCAuMS0uMDI1cS4xMTQtLjAzNC4yOTQtLjExOGMuMjQtLjExMy41NDctLjI5Ljg5My0uNTMzYTEwLjcgMTAgMCAwIDAgMi4yODctMi4yMzNjMS41MjctMS45OTcgMi44MDctNS4wMzEgMi4yNTMtOS4xODhhLjQ4LjQ4IDAgMCAwLS4zMjgtLjM5Yy0uNjUxLS4yMTMtMS43NS0uNTYtMi44MzctLjg1NUM5LjU1MiAxLjI5IDguNTMxIDEuMDY3IDggMS4wNjdjLS41MyAwLTEuNTUyLjIyMy0yLjY2Mi41MjR6TTUuMDcyLjU2QzYuMTU3LjI2NSA3LjMxIDAgOCAwczEuODQzLjI2NSAyLjkyOC41NmMxLjExLjMgMi4yMjkuNjU1IDIuODg3Ljg3YTEuNTQgMS41NCAwIDAgMSAxLjA0NCAxLjI2MmMuNTk2IDQuNDc3LS43ODcgNy43OTUtMi4yNTMtOS4xODhhLjQ4LjQ4IDAgMCAwLS4zMjgtLjM5Yy0uOTUyLS4zMjUtMS44OS0uNjUyLTIuODM3LS44NTZDOS44MjIgMS4yNzggOC45MTcgMS4xMSA4IDEuMDFjLS45MTcgMC0xLjgyMi4xNjgtMi42NjIuNDh6TTUuMDcyLjU2QzYuMTU3LjI2NSA3LjMxIDAgOCAwczEuODQzLjI2NSAyLjkyOC41NmMxLjExLjMgMi4yMjkuNjU1IDIuODg3Ljg3YTEuNTQgMS41NCAwIDAgMSAxLjA0NCAxLjI2MmMuNTk2IDQuNDc3LS43ODcgNy43OTUtMi40NjUgOS45OWExMS44IDExLjggMCAwIDEtMi41MTcgMi40NTMgNyA3IDAgMCAxLTEuMDQ4LjYyNWMtLjI4LjEzMi0uNTgxLjI0LS44MjkuMjRzLS41NDgtLjEwOC0uODI5LS4yNGE3IDcgMCAwIDEtMS4wNDgtLjYyNSAxMS44IDExLjggMCAwIDEtMi41MTctMi40NTNDMS45MjggMTAuNDg3LjU0NSA3LjE2OSAxLjE0MSAyLjY5MkExLjU0IDEuNTQgMCAwIDEgMi4xODUgMS40MyA2MyA2MyAwIDAgMSA1LjA3Mi41NnoiLz4gPHBhdGggZD0iTTkuNSA2LjVhMS41IDEuNSAwIDAgMS0xIDEuNDE1bC4zODUgMS45OWEuNS41IDAgMCAxLS40OTEuNTk1aC0uNzg4YS41LjUgMCAwIDEtLjQ5LS41OTVsLjM4NC0xLjk5YTEuNSAxLjUgMCAxIDEgMi0xLjQxNSIvPiA8L3N2Zz4=" alt="Shield Lock Icon">
                 Local Password Vault
             </a>
@@ -152,5 +155,11 @@
     <script src="script.js"></script>
     <!-- Bootstrap JS bundle (Popper included) -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
+    
+
+    <!-- Toast container for save notifications -->
+    <div id="toastContainer" class="position-fixed top-0 end-0 p-3" style="z-index: 1080;">
+        <!-- Dynamic toasts will be appended here -->
+    </div>
 </body>
 </html>

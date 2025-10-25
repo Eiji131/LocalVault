@@ -9,6 +9,156 @@ let currentPasswords = []; // Holds all passwords currently in the DB
 let sortColumn = 'website';
 let sortDirection = 'asc';
 let isAwaitingConfirmation = false; // Global flag for modal state
+// Toast instance for legacy saveToast (not used now). We'll use dynamic toasts instead.
+let saveToastInstance = null;
+let lastDeletedEntry = null; // cached for undo
+
+/** Create a dynamic Bootstrap toast and show it. Returns the Toast instance. */
+function createDynamicToast(message, variant = 'success', options = {}) {
+    const container = document.getElementById('toastContainer');
+    if (!container) {
+        // fallback to showToast which will create ephemeral box
+        showToast(message, variant);
+        return null;
+    }
+
+    // Build toast element
+    const toastEl = document.createElement('div');
+    toastEl.className = `toast align-items-center text-bg-${variant} border-0 mb-2`;
+    toastEl.setAttribute('role', 'alert');
+    toastEl.setAttribute('aria-live', 'assertive');
+    toastEl.setAttribute('aria-atomic', 'true');
+
+    // content (allow optional action button)
+    const inner = document.createElement('div');
+    inner.className = 'd-flex';
+
+    const body = document.createElement('div');
+    body.className = 'toast-body';
+    body.innerHTML = options.html ? (options.htmlContent || message) : message;
+    inner.appendChild(body);
+
+    if (options.action) {
+        const actionBtn = document.createElement('button');
+        actionBtn.type = 'button';
+        actionBtn.className = 'btn btn-sm btn-light ms-2';
+        actionBtn.innerHTML = options.action.label || 'Undo';
+        actionBtn.addEventListener('click', options.action.onClick);
+        inner.appendChild(actionBtn);
+    }
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn-close btn-close-white me-2 m-auto';
+    closeBtn.setAttribute('data-bs-dismiss', 'toast');
+    closeBtn.setAttribute('aria-label', 'Close');
+    inner.appendChild(closeBtn);
+
+    toastEl.appendChild(inner);
+    container.appendChild(toastEl);
+
+    try {
+        const toast = new bootstrap.Toast(toastEl, { delay: options.delay || 4000 });
+        toast.show();
+        // remove from DOM after hidden
+        toastEl.addEventListener('hidden.bs.toast', () => { toastEl.remove(); });
+        return toast;
+    } catch (e) {
+        console.warn('Failed to create bootstrap toast', e);
+        // fallback ephemeral
+        showToast(message, variant);
+        return null;
+    }
+}
+
+/**
+ * Show a toast notification. Uses Bootstrap toast if initialized, otherwise falls back to a small ephemeral DOM node.
+ * @param {string} message
+ * @param {'success'|'danger'|'info'} variant
+ */
+function showToast(message, variant = 'success') {
+    try {
+        const toastEl = document.getElementById('saveToast');
+        if (toastEl && window.bootstrap && saveToastInstance) {
+            // Update text and background
+            const body = toastEl.querySelector('.toast-body');
+            if (body) body.textContent = message;
+            // reset classes then add variant
+            toastEl.classList.remove('text-bg-success', 'text-bg-danger', 'text-bg-info');
+            toastEl.classList.add(variant === 'danger' ? 'text-bg-danger' : variant === 'info' ? 'text-bg-info' : 'text-bg-success');
+            saveToastInstance.show();
+            return;
+        }
+    } catch (err) {
+        console.warn('Bootstrap toast show failed', err);
+    }
+
+    // Fallback ephemeral notice
+    const fallback = document.createElement('div');
+    fallback.textContent = message;
+    fallback.style.position = 'fixed';
+    fallback.style.right = '20px';
+    fallback.style.top = '20px';
+    fallback.style.background = variant === 'danger' ? '#dc3545' : (variant === 'info' ? '#17a2b8' : '#28a745');
+    fallback.style.color = 'white';
+    fallback.style.padding = '8px 12px';
+    fallback.style.borderRadius = '6px';
+    fallback.style.zIndex = '2000';
+    document.body.appendChild(fallback);
+    setTimeout(() => fallback.remove(), 2000);
+}
+
+/**
+ * Shows a small ephemeral notification directly above the Save button.
+ * Used when user presses Enter or clicks Save with empty required fields.
+ */
+function showInlineToastOverSave(message, variant = 'warning') {
+    const saveButton = document.getElementById('saveButton');
+    if (!saveButton) {
+        // fallback to dynamic toasts if save button not found
+        createDynamicToast(message, variant, { delay: 2000 });
+        return;
+    }
+
+    // Create element
+    const el = document.createElement('div');
+    el.className = 'inline-toast p-2 rounded text-white d-inline-block';
+    el.style.position = 'absolute';
+    el.style.zIndex = '2000';
+    el.style.pointerEvents = 'none';
+    el.style.opacity = '1';
+    el.style.transition = 'opacity 0.25s ease';
+    el.style.fontSize = '0.9rem';
+    el.style.boxShadow = '0 4px 12px rgba(0,0,0,0.2)';
+
+    // Background color based on variant
+    if (variant === 'danger') el.style.background = '#dc3545';
+    else if (variant === 'success') el.style.background = '#28a745';
+    else if (variant === 'info') el.style.background = '#17a2b8';
+    else el.style.background = '#ffc107'; // warning
+
+    el.textContent = message;
+
+    document.body.appendChild(el);
+
+    // Position it centered above the save button
+    const rect = saveButton.getBoundingClientRect();
+    const scrollX = window.scrollX || window.pageXOffset;
+    const scrollY = window.scrollY || window.pageYOffset;
+
+    const elWidth = el.offsetWidth;
+    const left = rect.left + scrollX + Math.round((rect.width - elWidth) / 2);
+    const top = rect.top + scrollY - el.offsetHeight - 10; // 10px gap above
+
+    el.style.left = `${Math.max(8, left)}px`;
+    el.style.top = `${Math.max(8, top)}px`;
+
+    // Auto-dismiss after a short delay
+    setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 300);
+    }, 2000);
+}
 
 // --- Global Edit Modal Element References (Initialized later in initApp) ---
 let editModal, editUsernameInput, editPasswordInput, editWebsiteSpan, editEntryIdInput;
@@ -101,12 +251,41 @@ function addPassword(entry) {
             const toggleEl = document.getElementById('togglePassword');
             if (toggleEl) toggleEl.textContent = 'Show';
         }
+        // Show a success toast notification including the website name
+        try {
+            const message = `Saved: ${entry.website}`;
+            createDynamicToast(message, 'success', { delay: 2500 });
+        } catch (e) {
+            console.warn('Toast show failed', e);
+        }
     };
 
     request.onerror = (event) => {
         console.error("Error saving password:", event.target.errorCode);
         alert("Failed to save password. Check console for details.");
     };
+}
+
+/**
+ * Perform the save action (used by Save button and Enter key).
+ */
+function performSave() {
+    if (!db) {
+        alert('Database is still loading. Please wait a moment and try again.');
+        return;
+    }
+
+    const website = document.getElementById('website')?.value.trim();
+    const username = document.getElementById('username')?.value.trim();
+    const password = document.getElementById('password')?.value;
+
+    if (website && username && password) {
+        const newEntry = { website, username, password, createdAt: new Date() };
+        addPassword(newEntry);
+    } else {
+        // Show a small, non-blocking notification above the Save button
+        showInlineToastOverSave('Please fill out all fields.', 'warning');
+    }
 }
 
 /**
@@ -117,7 +296,10 @@ function deletePassword(idToDelete) {
 
     // OPTIMIZATION: Update global array and DOM immediately
     const index = currentPasswords.findIndex(p => p.id === idToDelete);
+    let deletedEntry = null;
     if (index !== -1) {
+        // cache for undo
+        deletedEntry = currentPasswords[index];
         currentPasswords.splice(index, 1); 
         const row = document.querySelector(`.delete-btn[data-id="${idToDelete}"]`)?.closest('tr');
         if (row) row.remove(); // Remove row from DOM
@@ -129,6 +311,21 @@ function deletePassword(idToDelete) {
 
     request.onsuccess = () => {
         console.log(`Entry with ID ${idToDelete} deleted (Disk write confirmed).`);
+        // Notify user with Undo option
+        lastDeletedEntry = deletedEntry;
+        createDynamicToast(`Deleted: ${deletedEntry ? deletedEntry.website : 'entry'}`, 'danger', {
+            delay: 6000,
+            action: {
+                label: 'Undo',
+                onClick: function() {
+                    if (!lastDeletedEntry) return;
+                    const toRestore = { ...lastDeletedEntry };
+                    // re-add to DB; will get a new id
+                    addPassword({ website: toRestore.website, username: toRestore.username, password: toRestore.password, createdAt: new Date() });
+                    lastDeletedEntry = null;
+                }
+            }
+        });
     };
 
     request.onerror = (event) => {
@@ -542,6 +739,9 @@ function renderPasswords(passwords) {
             <button class="btn btn-sm btn-outline-secondary copy-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Copy Password">
                 <i class="fas fa-copy"></i>
             </button>
+            <button class="btn btn-sm btn-outline-secondary copy-user-btn ms-1" data-id="${entry.id}" data-bs-toggle="tooltip" title="Copy Username">
+                <i class="fas fa-clipboard"></i>
+            </button>
             <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Delete">
                 <i class="fas fa-trash-alt"></i>
             </button>
@@ -593,6 +793,31 @@ function renderPasswords(passwords) {
                     setTimeout(() => btn.innerHTML = originalHTML, 1200);
                 }).catch(err => {
                     // fallback to older execCommand
+                    fallbackCopyTextToClipboard(copyText, btn, originalHTML);
+                });
+            } else {
+                fallbackCopyTextToClipboard(copyText, btn, originalHTML);
+            }
+        });
+    });
+
+    // Copy username listeners (copies the username to clipboard)
+    tableBody.querySelectorAll('.copy-user-btn').forEach(button => {
+        button.addEventListener('click', function(event) {
+            event.stopPropagation();
+            const id = parseInt(this.getAttribute('data-id'));
+            const entry = currentPasswords.find(p => p.id === id);
+            if (!entry) return;
+
+            const btn = this;
+            const originalHTML = btn.innerHTML;
+            const copyText = entry.username || '';
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(copyText).then(() => {
+                    btn.innerHTML = '<i class="fas fa-check"></i>';
+                    setTimeout(() => btn.innerHTML = originalHTML, 1200);
+                }).catch(err => {
                     fallbackCopyTextToClipboard(copyText, btn, originalHTML);
                 });
             } else {
@@ -667,23 +892,23 @@ function setupEventListeners() {
     if (saveButton) {
         saveButton.disabled = false;
         saveButton.textContent = 'Save Password';
-        saveButton.addEventListener('click', function() {
-            if (!db) {
-                alert('Database is still loading. Please wait a moment and try again.');
-                return; 
-            }
-            
-            const website = document.getElementById('website')?.value.trim();
-            const username = document.getElementById('username')?.value.trim();
-            const password = document.getElementById('password')?.value;
+        // clicking Save runs the shared performSave() routine
+        saveButton.addEventListener('click', performSave);
 
-            if (website && username && password) {
-                const newEntry = { website, username, password, createdAt: new Date() };
-                addPassword(newEntry);
-            } else {
-                alert('Please fill out all fields.');
+        // Also trigger save when the user presses Enter inside any of the inputs
+        const websiteInput = document.getElementById('website');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const _onEnter = (evt) => {
+            if (!evt) return;
+            if (evt.key === 'Enter') {
+                evt.preventDefault();
+                performSave();
             }
-        });
+        };
+        if (websiteInput) websiteInput.addEventListener('keydown', _onEnter);
+        if (usernameInput) usernameInput.addEventListener('keydown', _onEnter);
+        if (passwordInput) passwordInput.addEventListener('keydown', _onEnter);
     }
 
     // Clear Button
@@ -764,6 +989,38 @@ function setupEventListeners() {
         const btnClose = clearModal.querySelector('.btn-close');
         if (btnClose) btnClose.addEventListener('click', hideClearModal);
     }
+
+    // Initialize save toast (Bootstrap) if present
+    const saveToastEl = document.getElementById('saveToast');
+    if (saveToastEl && window.bootstrap) {
+        try {
+            saveToastInstance = new bootstrap.Toast(saveToastEl, { delay: 2000 });
+        } catch (e) {
+            console.warn('Failed to init save toast', e);
+            saveToastInstance = null;
+        }
+    }
+
+    // Initialize a popover on the navbar brand that explains local-only storage
+    const brandEl = document.getElementById('brand');
+    function initBrandPopover() {
+        if (!brandEl) return;
+        try {
+            if (window.bootstrap) {
+                // If not already initialized, create a popover instance
+                const existing = bootstrap.Popover.getInstance(brandEl);
+                if (!existing) {
+                    new bootstrap.Popover(brandEl, { trigger: 'hover focus', placement: 'bottom', html: false });
+                }
+            }
+        } catch (err) {
+            console.warn('Brand popover init failed', err);
+        }
+    }
+
+    // Try to init immediately if possible, otherwise when window finishes loading
+    if (window.bootstrap) initBrandPopover();
+    else window.addEventListener('load', initBrandPopover);
 
     // Edit modal elements
     editModal = document.getElementById('editModal');

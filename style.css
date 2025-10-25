@@ -115,3 +115,8 @@ body.dark-theme {
     background-color: #198754;
     border-color: #198754;
 }
+
+/* Ensure popover title/body text is black so the 'About this app' header is readable */
+.popover, .popover .popover-header, .popover .popover-body {
+    color: #000 !important;
+}

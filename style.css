@@ -36,6 +36,7 @@ body.dark-theme {
     background-color: var(--background-color);
     color: var(--text-color);
     border-color: var(--border-color);
+    overflow: auto; /* Add this to force scrollbars for inputs if content overflows */
 }
 
 .form-control:focus {
@@ -190,23 +191,35 @@ body.dark-theme {
 }
 
 /* Minimal, less-noticeable scrollbar for the table container */
-.table-responsive {
+.table-responsive,
+.form-control,
+textarea.form-control,
+.sidebar-panel {
     /* Firefox */
     scrollbar-width: thin;
     scrollbar-color: rgba(255,255,255,0.08) transparent;
 }
 
 /* WebKit (Chrome, Edge, Safari) */
-.table-responsive::-webkit-scrollbar {
+.table-responsive::-webkit-scrollbar,
+.form-control::-webkit-scrollbar,
+textarea.form-control::-webkit-scrollbar,
+.sidebar-panel::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-.table-responsive::-webkit-scrollbar-track {
+.table-responsive::-webkit-scrollbar-track,
+.form-control::-webkit-scrollbar-track,
+textarea.form-control::-webkit-scrollbar-track,
+.sidebar-panel::-webkit-scrollbar-track {
     background: transparent;
 }
 
-.table-responsive::-webkit-scrollbar-thumb {
+.table-responsive::-webkit-scrollbar-thumb,
+.form-control::-webkit-scrollbar-thumb,
+textarea.form-control::-webkit-scrollbar-thumb,
+.sidebar-panel::-webkit-scrollbar-thumb {
     background-color: rgba(255,255,255,0.08);
     border-radius: 6px;
     border: 2px solid transparent;
@@ -215,11 +228,17 @@ body.dark-theme {
 }
 
 /* Make the thumb more visible when hovering over the tbody */
-.table-responsive:hover::-webkit-scrollbar-thumb {
+.table-responsive:hover::-webkit-scrollbar-thumb,
+.form-control:hover::-webkit-scrollbar-thumb,
+textarea.form-control:hover::-webkit-scrollbar-thumb,
+.sidebar-panel:hover::-webkit-scrollbar-thumb {
     background-color: rgba(255,255,255,0.28);
 }
 
-.table-responsive:hover {
+.table-responsive:hover,
+.form-control:hover,
+textarea.form-control:hover,
+.sidebar-panel:hover {
     /* Firefox */
     scrollbar-color: rgba(255,255,255,0.28) transparent;
 }
@@ -274,11 +293,17 @@ body.light-theme .btn-close {
 }
 
 /* Scrollbar adjustments for light theme */
-body.light-theme .table-responsive::-webkit-scrollbar-thumb {
+body.light-theme .table-responsive::-webkit-scrollbar-thumb,
+body.light-theme .form-control::-webkit-scrollbar-thumb,
+body.light-theme textarea.form-control::-webkit-scrollbar-thumb,
+body.light-theme .sidebar-panel::-webkit-scrollbar-thumb {
     background-color: rgba(0,0,0,0.2);
 }
 
-body.light-theme .table-responsive:hover::-webkit-scrollbar-thumb {
+body.light-theme .table-responsive:hover::-webkit-scrollbar-thumb,
+body.light-theme .form-control:hover::-webkit-scrollbar-thumb,
+body.light-theme textarea.form-control:hover::-webkit-scrollbar-thumb,
+body.light-theme .sidebar-panel:hover::-webkit-scrollbar-thumb {
     background-color: rgba(0,0,0,0.4);
 }
 

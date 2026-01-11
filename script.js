@@ -12,6 +12,23 @@ let isAwaitingConfirmation = false; // Global flag for modal state
 // Toast instance for legacy saveToast (not used now). We'll use dynamic toasts instead.
 let saveToastInstance = null;
 let lastDeletedEntry = null; // cached for undo
+let deferredPrompt; // PWA install prompt
+
+// Listen for PWA install event
+window.addEventListener('beforeinstallprompt', (e) => {
+    // Prevent the mini-infobar from appearing on mobile
+    e.preventDefault();
+    deferredPrompt = e;
+    // Show the install button
+    const btn = document.getElementById('installAppBtn');
+    if (btn) btn.style.display = 'block';
+});
+
+window.addEventListener('appinstalled', () => {
+    deferredPrompt = null;
+    const btn = document.getElementById('installAppBtn');
+    if (btn) btn.style.display = 'none';
+});
 
 /** Create a dynamic Bootstrap toast and show it. Returns the Toast instance. */
 function createDynamicToast(message, variant = 'success', options = {}) {
@@ -161,7 +178,7 @@ function showInlineToastOverSave(message, variant = 'warning') {
 }
 
 // --- Global Edit Modal Element References (Initialized later in initApp) ---
-let editModal, editUsernameInput, editPasswordInput, editWebsiteSpan, editEntryIdInput;
+let editModal, editUsernameInput, editPasswordInput, editWebsiteInput, editEntryIdInput;
 
 /**
  * 1. Opens or creates the IndexedDB database.
@@ -353,6 +370,15 @@ function updatePassword(entry) {
     const store = transaction.objectStore(STORE_NAME);
     const request = store.put(entry); 
 
+    request.onsuccess = () => {
+        console.log(`Entry with ID ${entry.id} updated (Disk write confirmed).`);
+        try {
+            createDynamicToast(`Updated: ${entry.website}`, 'success', { delay: 2500 });
+        } catch (e) {
+            console.warn('Toast show failed', e);
+        }
+    };
+
     request.onerror = (event) => {
         console.error("Error updating password:", event.target.errorCode);
         alert("Failed to save changes to disk. Reloading data.");
@@ -407,30 +433,7 @@ function executeClearAll() {
 // --- IMPORT/EXPORT LOGIC ---
 // ------------------------------------------------------------------
 
-/**
- * Exports all passwords to a JSON file.
- */
-function exportPasswords() {
-    if (currentPasswords.length === 0) {
-        alert("No passwords to export.");
-        return;
-    }
 
-    const dataStr = JSON.stringify(currentPasswords, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    try {
-        link.click();
-    } catch (err) {
-        window.open(url, '_blank');
-    }
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-}
 
 /**
  * Helper: create an off-screen file input at runtime and trigger it.
@@ -466,6 +469,19 @@ function createAndTriggerFileInput(accept, onChangeHandler) {
 }
 
 /**
+ * Checks if a password entry with the same website, username, and password already exists.
+ * @param {object} entry The password entry to check.
+ * @returns {boolean} True if a duplicate exists, false otherwise.
+ */
+function isDuplicate(entry) {
+    return currentPasswords.some(existingEntry =>
+        existingEntry.website === entry.website &&
+        existingEntry.username === entry.username &&
+        existingEntry.password === entry.password
+    );
+}
+
+/**
  * Handles the import of passwords from a file.
  */
 function importPasswordsFromEvent(file, format) {
@@ -475,26 +491,43 @@ function importPasswordsFromEvent(file, format) {
     reader.onload = function(e) {
         try {
             let importedPasswords;
-            if (format === 'json') {
+            if (format === 'secured') {
                 importedPasswords = JSON.parse(e.target.result);
-            } else if (format === 'csv') {
-                importedPasswords = parseCSV(e.target.result);
+            } else {
+                // If the format is not 'secured', alert the user.
+                alert("Invalid file format. Please select a valid .secured file.");
+                return;
             }
 
             if (Array.isArray(importedPasswords)) {
                 // Basic validation of the imported data
                 const validPasswords = importedPasswords.filter(p => p && p.website && p.username && p.password);
 
-                if (validPasswords.length > 0) {
+                let uniquePasswordsToImport = [];
+                let duplicatesSkipped = 0;
+
+                validPasswords.forEach(password => {
+                    if (!isDuplicate(password)) {
+                        uniquePasswordsToImport.push(password);
+                    } else {
+                        duplicatesSkipped++;
+                    }
+                });
+
+                if (uniquePasswordsToImport.length > 0) {
                     const transaction = db.transaction([STORE_NAME], 'readwrite');
                     const store = transaction.objectStore(STORE_NAME);
 
-                    validPasswords.forEach(password => {
+                    uniquePasswordsToImport.forEach(password => {
                         store.add(password);
                     });
 
                     transaction.oncomplete = () => {
-                        alert(`${validPasswords.length} passwords imported successfully.`);
+                        let message = `${uniquePasswordsToImport.length} passwords imported successfully.`;
+                        if (duplicatesSkipped > 0) {
+                            message += ` ${duplicatesSkipped} duplicates skipped.`;
+                        }
+                        alert(message);
                         loadPasswords(); // Reload all passwords from the DB
                     };
 
@@ -502,127 +535,40 @@ function importPasswordsFromEvent(file, format) {
                         console.error("Error importing passwords:", event.target.errorCode);
                         alert("An error occurred during the import process.");
                     };
-                } else {
+                } else if (duplicatesSkipped > 0) {
+                    alert(`${duplicatesSkipped} duplicates skipped. No new passwords imported.`);
+                }
+                else {
                     alert("No valid password entries found in the file.");
                 }
             } else {
-                alert("Invalid file format. Please select a valid " + format.toUpperCase() + " file.");
+                alert("Invalid file format. Please select a valid .secured file.");
             }
         } catch (error) {
             console.error("Error parsing file:", error);
-            alert("Error reading or parsing the file. Make sure it is a valid " + format.toUpperCase() + " file.");
+            alert("Error reading or parsing the file. Make sure it is a valid .secured file.");
         }
     };
     reader.readAsText(file);
 }
 
-/**
- * Parses a CSV string into an array of password objects.
- * Robust basic CSV parser: handles CRLF/LF, quoted fields, and escaped quotes.
- */
-function parseCSV(csv) {
-    if (!csv) return [];
 
-    // Normalize line endings
-    const normalized = csv.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    // Split but keep empty lines for potential quoted newlines handling later; we'll filter empty rows after parse
-    const lines = normalized.split('\n');
-
-    // A parser that handles quoted fields and commas inside quotes
-    const parseRow = (row) => {
-        const fields = [];
-        let cur = '';
-        let inQuotes = false;
-        for (let i = 0; i < row.length; i++) {
-            const ch = row[i];
-            if (inQuotes) {
-                if (ch === '"') {
-                    if (row[i + 1] === '"') { // escaped quote
-                        cur += '"';
-                        i++;
-                    } else {
-                        inQuotes = false;
-                    }
-                } else {
-                    cur += ch;
-                }
-            } else {
-                if (ch === '"') {
-                    inQuotes = true;
-                } else if (ch === ',') {
-                    fields.push(cur);
-                    cur = '';
-                } else {
-                    cur += ch;
-                }
-            }
-        }
-        fields.push(cur);
-        return fields;
-    };
-
-    // find first non-empty line as header (skip empty or whitespace-only lines)
-    let headerLineIndex = 0;
-    while (headerLineIndex < lines.length && lines[headerLineIndex].trim() === '') headerLineIndex++;
-    if (headerLineIndex >= lines.length) return [];
-
-    const headers = parseRow(lines[headerLineIndex]).map(h => h.trim());
-    const passwords = [];
-
-    for (let i = headerLineIndex + 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.trim() === '') continue; // skip empty lines
-        const values = parseRow(line);
-        if (values.length === headers.length) {
-            const obj = {};
-            for (let j = 0; j < headers.length; j++) {
-                obj[headers[j]] = values[j];
-            }
-            passwords.push(obj);
-        } else {
-            // If a line didn't match header length, attempt to join subsequent lines (rare) or skip and log
-            console.warn('Skipped malformed CSV line (column mismatch):', line);
-        }
-    }
-
-    return passwords;
-}
 
 /**
- * Escapes a CSV cell value per RFC4180 and returns a string.
+ * Exports all passwords to a Secured file (JSON content).
  */
-function csvEscape(value) {
-    if (value === null || value === undefined) return '';
-    const s = String(value);
-    if (s.includes('"') || s.includes(',') || s.includes('\n')) {
-        return '"' + s.replace(/"/g, '""') + '"';
-    }
-    return s;
-}
-
-/**
- * Exports all passwords to a CSV file (more robust quoting).
- */
-function exportToCSV() {
+function exportToSecured() {
     if (currentPasswords.length === 0) {
         alert("No passwords to export.");
         return;
     }
 
-    const headers = ['website', 'username', 'password'];
-    const csvRows = [];
-    csvRows.push(headers.join(','));
-    currentPasswords.forEach(row => {
-        const r = headers.map(fieldName => csvEscape(row[fieldName]));
-        csvRows.push(r.join(','));
-    });
-    const csv = csvRows.join('\r\n');
-
-    const dataBlob = new Blob([csv], { type: 'text/csv' });
+    const dataStr = JSON.stringify(currentPasswords, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' }); // Type remains JSON, but extension changes
     const url = URL.createObjectURL(dataBlob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.csv`;
+    link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.secured`;
     document.body.appendChild(link);
 
     try {
@@ -651,7 +597,7 @@ function editEntry(idToEdit) {
         return;
     }
 
-    editWebsiteSpan.textContent = entry.website;
+    editWebsiteInput.value = entry.website;
     editUsernameInput.value = entry.username;
     editPasswordInput.value = entry.password;
     editEntryIdInput.value = entry.id;
@@ -684,6 +630,7 @@ function updateTableRow(entry) {
     if (!row) return;
 
     // Cells are 0-indexed: [0: Website, 1: Username, 2: Password, 3: Actions]
+    row.cells[0].textContent = entry.website;
     row.cells[1].textContent = entry.username;
     
     // Reset the Password cell to masked
@@ -736,11 +683,11 @@ function renderPasswords(passwords) {
             <button class="btn btn-sm btn-outline-primary edit-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Edit">
                 <i class="fas fa-pencil-alt"></i>
             </button>
-            <button class="btn btn-sm btn-outline-secondary copy-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Copy Password">
-                <i class="fas fa-copy"></i>
-            </button>
-            <button class="btn btn-sm btn-outline-secondary copy-user-btn ms-1" data-id="${entry.id}" data-bs-toggle="tooltip" title="Copy Username">
+            <button class="btn btn-sm btn-outline-secondary copy-user-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Copy Username">
                 <i class="fas fa-clipboard"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-secondary copy-btn ms-1" data-id="${entry.id}" data-bs-toggle="tooltip" title="Copy Password">
+                <i class="fas fa-copy"></i>
             </button>
             <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${entry.id}" data-bs-toggle="tooltip" title="Delete">
                 <i class="fas fa-trash-alt"></i>
@@ -959,9 +906,28 @@ function setupEventListeners() {
 
     // Search bar
     const searchBar = document.getElementById('searchBar');
+    const clearSearchButton = document.getElementById('clearSearchButton');
     if (searchBar) {
-        searchBar.addEventListener('keyup', function() {
+        searchBar.addEventListener('input', function() {
             filterPasswords(this.value);
+            if (clearSearchButton) {
+                if (this.value.length > 0) {
+                    clearSearchButton.style.display = 'block';
+                } else {
+                    clearSearchButton.style.display = 'none';
+                }
+            }
+        });
+    }
+
+    // Clear Search Button
+    if (clearSearchButton) {
+        clearSearchButton.addEventListener('click', function() {
+            if (searchBar) {
+                searchBar.value = '';
+                filterPasswords('');
+                clearSearchButton.style.display = 'none';
+            }
         });
     }
 
@@ -1024,15 +990,30 @@ function setupEventListeners() {
 
     // Edit modal elements
     editModal = document.getElementById('editModal');
+    editWebsiteInput = document.getElementById('editWebsite'); // NEW: Initialize editWebsiteInput
     editUsernameInput = document.getElementById('editUsername');
     editPasswordInput = document.getElementById('editPassword');
-    editWebsiteSpan = document.getElementById('editModalWebsite');
+    // editWebsiteSpan removed as it's no longer used for displaying website in title
     editEntryIdInput = document.getElementById('editEntryId');
     const editSaveButton = document.getElementById('editSave');
     const editCancelButton = document.getElementById('editCancel');
     const toggleEditPasswordButton = document.getElementById('toggleEditPassword');
     const editCloseButton = editModal ? editModal.querySelector('.btn-close') : null;
     
+    // Allow Enter key to trigger Save in Edit Modal
+    if (editSaveButton) {
+        [editWebsiteInput, editUsernameInput, editPasswordInput].forEach(input => {
+            if (input) {
+                input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        editSaveButton.click();
+                    }
+                });
+            }
+        });
+    }
+
     function hideEditModal() {
         if(editModal) {
             editModal.classList.remove('show');
@@ -1078,26 +1059,31 @@ function setupEventListeners() {
                 return;
             }
 
+            const newWebsite = editWebsiteInput.value.trim(); // NEW: Get new website value
             const newUsername = editUsernameInput.value.trim();
             const newPassword = editPasswordInput.value;
             
             // Check if values were actually changed
-            if (newUsername === originalEntry.username && newPassword === originalEntry.password) {
+            if (newWebsite === originalEntry.website &&
+                newUsername === originalEntry.username && 
+                newPassword === originalEntry.password) {
                 alert("No changes were made.");
                 hideEditModal();
                 return;
             }
             
-            if (newUsername && newPassword) {
+            // NEW: Validate website as well
+            if (newWebsite && newUsername && newPassword) {
                 const updatedEntry = {
                     ...originalEntry, 
+                    website: newWebsite, // NEW: Include website in updated entry
                     username: newUsername,
                     password: newPassword,
                 };
                 updatePassword(updatedEntry);
                 hideEditModal();
             } else {
-                alert("Username and Password cannot be empty.");
+                alert("Website, Username and Password cannot be empty."); // NEW: Update alert message
             }
         });
     }
@@ -1115,37 +1101,240 @@ function setupEventListeners() {
     });
 
     // --- IMPORT/EXPORT BUTTONS ---
-    const importButton = document.getElementById('importButton');
-    const exportButton = document.getElementById('exportButton');
-    const csvImportButton = document.getElementById('csvImportButton');
-    const csvExportButton = document.getElementById('csvExportButton');
+    const securedImportButton = document.getElementById('securedImportButton');
+    const securedExportButton = document.getElementById('securedExportButton');
 
-    if (importButton) {
-        importButton.addEventListener('click', () => {
-            // create input dynamically to avoid Brave/extension blocking issues with hidden inputs
-            createAndTriggerFileInput('.json', (ev) => {
+    if (securedImportButton) {
+        securedImportButton.addEventListener('click', () => {
+            createAndTriggerFileInput('.secured', (ev) => {
                 const file = ev.target.files && ev.target.files[0];
-                importPasswordsFromEvent(file, 'json');
+                importPasswordsFromEvent(file, 'secured');
             });
         });
     }
 
-    if (csvImportButton) {
-        csvImportButton.addEventListener('click', () => {
-            createAndTriggerFileInput('.csv', (ev) => {
-                const file = ev.target.files && ev.target.files[0];
-                importPasswordsFromEvent(file, 'csv');
-            });
+    if (securedExportButton) {
+        securedExportButton.addEventListener('click', exportToSecured);
+    }
+
+    // Install App Button
+    const installAppBtn = document.getElementById('installAppBtn');
+    if (installAppBtn) {
+        installAppBtn.addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                console.log(`User response to the install prompt: ${outcome}`);
+                deferredPrompt = null;
+                installAppBtn.style.display = 'none';
+            }
+        });
+    }
+}
+
+// ------------------------------------------------------------------
+// --- SECURITY / QR LOCK SYSTEM ---
+// ------------------------------------------------------------------
+const LOCK_KEY_STORAGE = 'localVault_totpSecret';
+
+function initSecurity() {
+    const lockScreen = document.getElementById('lockScreen');
+    const lockContent = document.getElementById('lockContent');
+    if (!lockScreen || !lockContent) return;
+
+    // Migration: Clear old legacy key if it exists to prevent getting stuck
+    if (localStorage.getItem('localVault_securityKey')) {
+        localStorage.removeItem('localVault_securityKey');
+    }
+
+    const storedKey = localStorage.getItem(LOCK_KEY_STORAGE);
+
+    // Always show lock screen initially
+    lockScreen.style.display = 'flex';
+
+    if (!storedKey) {
+        renderSetupMode(lockContent);
+    } else {
+        renderUnlockMode(lockContent, storedKey);
+    }
+}
+
+function renderSetupMode(container) {
+    // Use OTPAuth to generate a secret
+    const OTPAuth = window.OTPAuth;
+    const secret = new OTPAuth.Secret({ size: 20 });
+    const totp = new OTPAuth.TOTP({
+        issuer: "LocalVault",
+        label: "User",
+        algorithm: "SHA1",
+        digits: 6,
+        period: 30,
+        secret: secret
+    });
+    
+    const uri = totp.toString();
+
+    container.innerHTML = `
+        <h3 class="mb-3">Setup Mobile Security</h3>
+        <p>1. Install an Authenticator app (Google Authenticator, Authy, etc.) on your phone.</p>
+        <p>2. Scan this QR code with the app:</p>
+        <canvas id="qrcodeCanvas" class="bg-white p-2 m-auto rounded mb-3"></canvas>
+        <p>3. Enter the 6-digit code from your phone to confirm:</p>
+        <div class="input-group mb-3" style="max-width: 200px; margin: 0 auto;">
+            <input type="text" id="setupCodeInput" class="form-control text-center" placeholder="000000" maxlength="6" autocomplete="off">
+        </div>
+        <button id="confirmSetupBtn" class="btn btn-success w-100">Verify & Enable</button>
+    `;
+
+    // Generate QR
+    const canvas = document.getElementById('qrcodeCanvas');
+    if (window.QRCode) {
+        QRCode.toCanvas(canvas, uri, { width: 200, margin: 2 }, function (error) {
+            if (error) console.error('QR Generation Error:', error);
         });
     }
 
-    if (exportButton) {
-        exportButton.addEventListener('click', exportPasswords);
+    const setupInput = document.getElementById('setupCodeInput');
+    const confirmBtn = document.getElementById('confirmSetupBtn');
+
+    if (setupInput) {
+        setupInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                confirmBtn.click();
+            }
+        });
     }
 
-    if (csvExportButton) {
-        csvExportButton.addEventListener('click', exportToCSV);
+    confirmBtn.addEventListener('click', () => {
+        const token = document.getElementById('setupCodeInput').value.trim();
+        const delta = totp.validate({ token: token, window: 1 });
+        
+        if (delta !== null) {
+            localStorage.setItem(LOCK_KEY_STORAGE, secret.base32);
+            location.reload();
+        } else {
+            alert("Invalid code. Please try again.");
+        }
+    });
+}
+
+function renderUnlockMode(container, secretBase32) {
+    container.innerHTML = `
+        <h3 class="mb-3"><i class="fas fa-lock"></i> Vault Locked</h3>
+        <p>Open your Authenticator app and enter the code for <strong>LocalVault</strong>.</p>
+        <div class="input-group mb-3" style="max-width: 200px; margin: 0 auto;">
+            <input type="text" id="unlockCodeInput" class="form-control text-center" placeholder="000000" maxlength="6" autofocus autocomplete="off">
+            <button class="btn btn-primary" id="unlockBtn"><i class="fas fa-arrow-right"></i></button>
+        </div>
+        <button id="resetVaultBtn" class="btn btn-outline-danger btn-sm mt-4">Reset Vault (Wipe Data)</button>
+    `;
+
+    const input = document.getElementById('unlockCodeInput');
+    const btn = document.getElementById('unlockBtn');
+
+    const attemptUnlock = () => {
+        const token = input.value.trim();
+        const OTPAuth = window.OTPAuth;
+        
+        try {
+            const secret = OTPAuth.Secret.fromBase32(secretBase32);
+            const totp = new OTPAuth.TOTP({
+                issuer: "LocalVault",
+                label: "User",
+                algorithm: "SHA1",
+                digits: 6,
+                period: 30,
+                secret: secret
+            });
+
+            const delta = totp.validate({ token: token, window: 1 });
+            
+            if (delta !== null) {
+                document.getElementById('lockScreen').style.display = 'none';
+                createDynamicToast('Identity Verified.', 'success');
+            } else {
+                input.classList.add('is-invalid');
+                setTimeout(() => input.classList.remove('is-invalid'), 1000);
+                input.value = '';
+            }
+        } catch (e) {
+            console.error("TOTP Error", e);
+            alert("Security Error. Resetting vault recommended.");
+        }
+    };
+
+    btn.addEventListener('click', attemptUnlock);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') attemptUnlock();
+    });
+
+    document.getElementById('resetVaultBtn').addEventListener('click', () => {
+        if(confirm("WARNING: This will delete ALL passwords and reset the app. Are you sure?")) {
+             if(db) db.close();
+             const req = indexedDB.deleteDatabase(DB_NAME);
+             req.onsuccess = () => {
+                 localStorage.removeItem(LOCK_KEY_STORAGE);
+                 location.reload();
+             };
+             req.onerror = () => {
+                 // Force reset even if DB delete errors
+                 localStorage.removeItem(LOCK_KEY_STORAGE);
+                 location.reload();
+             };
+        }
+    });
+}
+
+// ------------------------------------------------------------------
+// --- THEME HANDLING ---
+// ------------------------------------------------------------------
+function initTheme() {
+    const themeBtn = document.getElementById('themeToggleBtn');
+    const installBtn = document.getElementById('installAppBtn');
+    const navbar = document.querySelector('.navbar');
+    const body = document.body;
+
+    const setLightMode = () => {
+        body.classList.remove('dark-theme');
+        body.classList.add('light-theme');
+        navbar.classList.remove('navbar-dark', 'bg-dark');
+        navbar.classList.add('navbar-light', 'bg-light');
+        
+        themeBtn.innerHTML = '<i class="fas fa-moon"></i>';
+        themeBtn.title = "Switch to Dark Mode";
+        themeBtn.classList.replace('btn-outline-light', 'btn-outline-dark');
+        
+        if (installBtn) installBtn.classList.replace('btn-outline-light', 'btn-outline-dark');
+        localStorage.setItem('theme', 'light');
+    };
+
+    const setDarkMode = () => {
+        body.classList.remove('light-theme');
+        body.classList.add('dark-theme');
+        navbar.classList.remove('navbar-light', 'bg-light');
+        navbar.classList.add('navbar-dark', 'bg-dark');
+        
+        themeBtn.innerHTML = '<i class="fas fa-sun"></i>';
+        themeBtn.title = "Switch to Light Mode";
+        themeBtn.classList.replace('btn-outline-dark', 'btn-outline-light');
+        
+        if (installBtn) installBtn.classList.replace('btn-outline-dark', 'btn-outline-light');
+        localStorage.setItem('theme', 'dark');
+    };
+
+    // Apply saved theme on load
+    if (localStorage.getItem('theme') === 'light') {
+        setLightMode();
     }
+
+    themeBtn.addEventListener('click', () => {
+        if (body.classList.contains('dark-theme')) {
+            setLightMode();
+        } else {
+            setDarkMode();
+        }
+    });
 }
 
 // ------------------------------------------------------------------
@@ -1153,6 +1342,8 @@ function setupEventListeners() {
 // ------------------------------------------------------------------
 
 function initApp() {
+    initSecurity();
+    initTheme();
     // open DB first, then setup UI and listeners
     openDB()
         .then(() => {

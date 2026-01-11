@@ -1179,6 +1179,13 @@ function renderSetupMode(container) {
         <p>1. Install an Authenticator app (Google Authenticator, Authy, etc.) on your phone.</p>
         <p>2. Scan this QR code with the app:</p>
         <canvas id="qrcodeCanvas" class="bg-white p-2 m-auto rounded mb-3"></canvas>
+        <p class="mb-2"><strong>OR manually enter this key:</strong></p>
+        <div class="input-group mb-3" style="max-width: 350px; margin: 0 auto;">
+            <input type="text" id="totpSecretKeyDisplay" class="form-control text-center" readonly value="${secret.base32}">
+            <button class="btn btn-outline-secondary" type="button" id="copyTotpSecretBtn" title="Copy Secret Key">
+                <i class="fas fa-copy"></i>
+            </button>
+        </div>
         <p>3. Enter the 6-digit code from your phone to confirm:</p>
         <div class="input-group mb-3" style="max-width: 200px; margin: 0 auto;">
             <input type="text" id="setupCodeInput" class="form-control text-center" placeholder="000000" maxlength="6" autocomplete="off">
@@ -1196,6 +1203,27 @@ function renderSetupMode(container) {
 
     const setupInput = document.getElementById('setupCodeInput');
     const confirmBtn = document.getElementById('confirmSetupBtn');
+    const copyTotpSecretBtn = document.getElementById('copyTotpSecretBtn'); // Get the copy button
+    const totpSecretKeyDisplay = document.getElementById('totpSecretKeyDisplay'); // Get the display input
+
+    if (copyTotpSecretBtn && totpSecretKeyDisplay) {
+        copyTotpSecretBtn.addEventListener('click', function() {
+            const secretText = totpSecretKeyDisplay.value;
+            const btn = this;
+            const originalHTML = btn.innerHTML;
+
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(secretText).then(() => {
+                    btn.innerHTML = '<i class="fas fa-check"></i>';
+                    setTimeout(() => btn.innerHTML = originalHTML, 1200);
+                }).catch(err => {
+                    fallbackCopyTextToClipboard(secretText, btn, originalHTML);
+                });
+            } else {
+                fallbackCopyTextToClipboard(secretText, btn, originalHTML);
+            }
+        });
+    }
 
     if (setupInput) {
         setupInput.addEventListener('keydown', (e) => {

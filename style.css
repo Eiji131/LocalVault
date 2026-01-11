@@ -301,3 +301,81 @@ body.light-theme .table-responsive:hover::-webkit-scrollbar-thumb {
         padding: 1rem;
     }
 }
+
+@media (max-width: 768px) {
+    .table-responsive {
+        border: none; /* Remove outer border */
+    }
+
+    #passwordTable {
+        border: none;
+        table-layout: auto; /* Allow content to dictate column width if needed */
+    }
+
+    #passwordTable thead {
+        /* Visually hide the header, but keep it accessible for screen readers */
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border-width: 0;
+    }
+
+    #passwordTable tr {
+        display: block;
+        margin-bottom: 1rem;
+        border: 1px solid var(--border-color);
+        border-radius: .25rem;
+        background-color: var(--card-color);
+        box-shadow: 0 .125rem .25rem rgba(0,0,0,.075);
+    }
+
+    #passwordTable td {
+        display: block;
+        text-align: left;
+        padding-left: 8rem; /* Make fixed space for the pseudo-element label */
+        position: relative;
+        border: none; /* Remove individual cell borders */
+        padding-top: .75rem;
+        padding-bottom: .75rem;
+    }
+
+    #passwordTable td::before {
+        content: attr(data-label); /* Use data-label attribute for content */
+        position: absolute;
+        left: 0.75rem;
+        width: 7rem; /* Fixed width for label */
+        padding-right: 1rem;
+        white-space: nowrap;
+        text-align: left;
+        font-weight: bold;
+        color: var(--secondary-color);
+    }
+    
+    /* Specific adjustments for actions cell */
+    #passwordTable td.action-cell {
+        text-align: left;
+        padding-left: 8rem; /* Match other cells for consistent alignment */
+        padding-right: 0.75rem;
+        display: flex; /* Use flexbox for button alignment */
+        justify-content: flex-start;
+        gap: 0.5rem;
+    }
+    
+    #passwordTable td.action-cell::before {
+        content: "Actions";
+        position: absolute; /* Revert to absolute for consistent label positioning */
+        left: 0.75rem; /* Consistent left position */
+        width: 7rem; /* Fixed width for label, consistent with other labels */
+        padding-right: 0; /* No padding needed */
+        flex-grow: 1; /* Allow label to take available space */
+        text-align: left;
+        /* Remove specific inline-block and margin-right for buttons next to it */
+        display: block; /* Default display for pseudo-element, ensures it takes full width within absolute positioning */
+        margin-right: 0;
+    }
+}

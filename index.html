@@ -15,6 +15,8 @@
     <!-- QR Code Libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.1/qrcode.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/otpauth/9.2.1/otpauth.umd.min.js"></script>
+    <!-- Crypto-js Library for Encryption/Decryption -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="dark-theme">
@@ -173,6 +175,76 @@
                 <div class="modal-footer">
                     <button type="button" id="editCancel" class="btn btn-secondary cancel-btn">Cancel</button>
                     <button type="button" id="editSave" class="btn btn-primary confirm-btn">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Encryption Password Modal (for Export) -->
+    <div id="encryptionModal" class="modal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-lock"></i> Set Encryption Password</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>Create a password to encrypt your exported data. You'll need this password to import it later.</p>
+                    <div class="input-group mb-3">
+                        <span class="input-group-text"><i class="fas fa-key"></i></span>
+                        <div class="form-floating">
+                            <input type="password" class="form-control" id="encryptionPassword" placeholder="Encryption password" required>
+                            <label for="encryptionPassword">Encryption Password</label>
+                        </div>
+                        <button class="btn btn-outline-secondary" type="button" id="toggleEncryptionPassword">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                    <div class="input-group mb-3">
+                        <span class="input-group-text"><i class="fas fa-key"></i></span>
+                        <div class="form-floating">
+                            <input type="password" class="form-control" id="confirmEncryptionPassword" placeholder="Confirm password" required>
+                            <label for="confirmEncryptionPassword">Confirm Password</label>
+                        </div>
+                        <button class="btn btn-outline-secondary" type="button" id="toggleConfirmPassword">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                    <small class="text-muted">Passwords must match and be at least 12 characters long.</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" id="confirmEncryption" class="btn btn-primary">Export Encrypted</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Decryption Password Modal (for Import) -->
+    <div id="decryptionModal" class="modal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fas fa-unlock"></i> Enter Decryption Password</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>This file is encrypted. Enter the password to decrypt it.</p>
+                    <p id="decryptionAttemptWarning" class="text-warning small" style="display: none;"></p>
+                    <div class="input-group mb-3">
+                        <span class="input-group-text"><i class="fas fa-key"></i></span>
+                        <div class="form-floating">
+                            <input type="password" class="form-control" id="decryptionPassword" placeholder="Decryption password" required>
+                            <label for="decryptionPassword">Decryption Password</label>
+                        </div>
+                        <button class="btn btn-outline-secondary" type="button" id="toggleDecryptionPassword">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" id="confirmDecryption" class="btn btn-primary">Decrypt & Import</button>
                 </div>
             </div>
         </div>

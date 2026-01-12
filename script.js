@@ -433,7 +433,133 @@ function executeClearAll() {
 // --- IMPORT/EXPORT LOGIC ---
 // ------------------------------------------------------------------
 
+// Security constants
+const MIN_ENCRYPTION_PASSWORD_LENGTH = 12;
+const MAX_DECRYPTION_ATTEMPTS = 5;
+const DECRYPTION_LOCKOUT_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
 
+// Global state for pending import/export operations
+let pendingImportFile = null;
+let pendingExportPassword = null;
+let decryptionAttempts = 0;
+let lastDecryptionAttemptTime = 0;
+let isDecryptionLocked = false;
+
+/**
+ * Encrypts data using CryptoJS AES encryption
+ * @param {string} data - The data to encrypt (JSON string)
+ * @param {string} password - The encryption password
+ * @returns {string} - Encrypted data (cipher text)
+ */
+function encryptData(data, password) {
+    try {
+        const encrypted = CryptoJS.AES.encrypt(data, password).toString();
+        return encrypted;
+    } catch (error) {
+        console.error("Encryption error:", error);
+        throw new Error("Failed to encrypt data");
+    }
+}
+
+/**
+ * Decrypts data using CryptoJS AES decryption
+ * @param {string} encryptedData - The encrypted data
+ * @param {string} password - The decryption password
+ * @returns {string} - Decrypted data (JSON string)
+ */
+function decryptData(encryptedData, password) {
+    try {
+        const decrypted = CryptoJS.AES.decrypt(encryptedData, password).toString(CryptoJS.enc.Utf8);
+        if (!decrypted) {
+            throw new Error("Decryption failed - incorrect password or corrupted data");
+        }
+        return decrypted;
+    } catch (error) {
+        console.error("Decryption error:", error);
+        throw new Error("Failed to decrypt data - incorrect password or corrupted file");
+    }
+}
+
+/**
+ * Validates encryption password
+ * @param {string} password - The password to validate
+ * @returns {object} - { valid: boolean, message: string }
+ */
+function validateEncryptionPassword(password) {
+    if (!password || password.length < MIN_ENCRYPTION_PASSWORD_LENGTH) {
+        return {
+            valid: false,
+            message: `Password must be at least ${MIN_ENCRYPTION_PASSWORD_LENGTH} characters long`
+        };
+    }
+    return { valid: true, message: "Password is valid" };
+}
+
+/**
+ * Checks and enforces rate limiting for decryption attempts
+ * @returns {object} - { allowed: boolean, message: string, remainingTime: number }
+ */
+function checkDecryptionRateLimit() {
+    const now = Date.now();
+    
+    // Check if currently locked
+    if (isDecryptionLocked) {
+        const timeSinceLock = now - lastDecryptionAttemptTime;
+        if (timeSinceLock < DECRYPTION_LOCKOUT_TIME) {
+            const remainingSeconds = Math.ceil((DECRYPTION_LOCKOUT_TIME - timeSinceLock) / 1000);
+            return {
+                allowed: false,
+                message: `Too many failed attempts. Please wait ${remainingSeconds} seconds.`,
+                remainingTime: remainingSeconds
+            };
+        } else {
+            // Lockout period has expired
+            isDecryptionLocked = false;
+            decryptionAttempts = 0;
+            lastDecryptionAttemptTime = 0;
+        }
+    }
+    
+    return { allowed: true, message: "Rate limit check passed", remainingTime: 0 };
+}
+
+/**
+ * Records a failed decryption attempt and applies rate limiting if needed
+ */
+function recordFailedDecryptionAttempt() {
+    decryptionAttempts++;
+    lastDecryptionAttemptTime = Date.now();
+    
+    if (decryptionAttempts >= MAX_DECRYPTION_ATTEMPTS) {
+        isDecryptionLocked = true;
+    }
+}
+
+/**
+ * Updates the decryption attempt warning display
+ */
+function updateDecryptionAttemptWarning() {
+    const warningEl = document.getElementById('decryptionAttemptWarning');
+    if (!warningEl) return;
+    
+    if (decryptionAttempts > 0 && decryptionAttempts < MAX_DECRYPTION_ATTEMPTS) {
+        const remainingAttempts = MAX_DECRYPTION_ATTEMPTS - decryptionAttempts;
+        warningEl.textContent = `⚠️ ${remainingAttempts} attempt${remainingAttempts === 1 ? '' : 's'} remaining before lockout`;
+        warningEl.style.display = 'block';
+    } else {
+        warningEl.style.display = 'none';
+    }
+}
+
+/**
+ * Resets decryption attempt counter
+ */
+function resetDecryptionAttempts() {
+    decryptionAttempts = 0;
+    isDecryptionLocked = false;
+    lastDecryptionAttemptTime = 0;
+    updateDecryptionAttemptWarning();
+}
 
 /**
  * Helper: create an off-screen file input at runtime and trigger it.
@@ -482,7 +608,7 @@ function isDuplicate(entry) {
 }
 
 /**
- * Handles the import of passwords from a file.
+ * Handles the import of passwords from a file with decryption if needed.
  */
 function importPasswordsFromEvent(file, format) {
     if (!file) return;
@@ -491,59 +617,27 @@ function importPasswordsFromEvent(file, format) {
     reader.onload = function(e) {
         try {
             let importedPasswords;
+            const fileContent = e.target.result;
+
             if (format === 'secured') {
-                importedPasswords = JSON.parse(e.target.result);
+                // Check if the file is encrypted by looking for CryptoJS marker
+                if (fileContent.includes('U2FsdGVkX1')) {
+                    // File appears to be encrypted, store it and show decryption modal
+                    pendingImportFile = fileContent;
+                    const decryptionModal = new bootstrap.Modal(document.getElementById('decryptionModal'));
+                    decryptionModal.show();
+                    return;
+                } else {
+                    // File is not encrypted, parse directly
+                    importedPasswords = JSON.parse(fileContent);
+                }
             } else {
-                // If the format is not 'secured', alert the user.
                 alert("Invalid file format. Please select a valid .secured file.");
                 return;
             }
 
-            if (Array.isArray(importedPasswords)) {
-                // Basic validation of the imported data
-                const validPasswords = importedPasswords.filter(p => p && p.website && p.username && p.password);
-
-                let uniquePasswordsToImport = [];
-                let duplicatesSkipped = 0;
-
-                validPasswords.forEach(password => {
-                    if (!isDuplicate(password)) {
-                        uniquePasswordsToImport.push(password);
-                    } else {
-                        duplicatesSkipped++;
-                    }
-                });
-
-                if (uniquePasswordsToImport.length > 0) {
-                    const transaction = db.transaction([STORE_NAME], 'readwrite');
-                    const store = transaction.objectStore(STORE_NAME);
-
-                    uniquePasswordsToImport.forEach(password => {
-                        store.add(password);
-                    });
-
-                    transaction.oncomplete = () => {
-                        let message = `${uniquePasswordsToImport.length} passwords imported successfully.`;
-                        if (duplicatesSkipped > 0) {
-                            message += ` ${duplicatesSkipped} duplicates skipped.`;
-                        }
-                        alert(message);
-                        loadPasswords(); // Reload all passwords from the DB
-                    };
-
-                    transaction.onerror = (event) => {
-                        console.error("Error importing passwords:", event.target.errorCode);
-                        alert("An error occurred during the import process.");
-                    };
-                } else if (duplicatesSkipped > 0) {
-                    alert(`${duplicatesSkipped} duplicates skipped. No new passwords imported.`);
-                }
-                else {
-                    alert("No valid password entries found in the file.");
-                }
-            } else {
-                alert("Invalid file format. Please select a valid .secured file.");
-            }
+            // Process the imported passwords
+            processImportedPasswords(importedPasswords);
         } catch (error) {
             console.error("Error parsing file:", error);
             alert("Error reading or parsing the file. Make sure it is a valid .secured file.");
@@ -552,34 +646,133 @@ function importPasswordsFromEvent(file, format) {
     reader.readAsText(file);
 }
 
+/**
+ * Processes imported passwords and adds them to the database
+ * @param {array} importedPasswords - Array of password entries to import
+ */
+function processImportedPasswords(importedPasswords) {
+    if (Array.isArray(importedPasswords)) {
+        // Basic validation of the imported data
+        const validPasswords = importedPasswords.filter(p => p && p.website && p.username && p.password);
 
+        let uniquePasswordsToImport = [];
+        let duplicatesSkipped = 0;
+
+        validPasswords.forEach(password => {
+            if (!isDuplicate(password)) {
+                uniquePasswordsToImport.push(password);
+            } else {
+                duplicatesSkipped++;
+            }
+        });
+
+        if (uniquePasswordsToImport.length > 0) {
+            const transaction = db.transaction([STORE_NAME], 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+
+            uniquePasswordsToImport.forEach(password => {
+                store.add(password);
+            });
+
+            transaction.oncomplete = () => {
+                let message = `${uniquePasswordsToImport.length} passwords imported successfully.`;
+                if (duplicatesSkipped > 0) {
+                    message += ` ${duplicatesSkipped} duplicates skipped.`;
+                }
+                createDynamicToast(message, 'success');
+                loadPasswords(); // Reload all passwords from the DB
+            };
+
+            transaction.onerror = (event) => {
+                console.error("Error importing passwords:", event.target.errorCode);
+                createDynamicToast("An error occurred during the import process.", 'danger');
+            };
+        } else if (duplicatesSkipped > 0) {
+            createDynamicToast(`${duplicatesSkipped} duplicates skipped. No new passwords imported.`, 'warning');
+        } else {
+            createDynamicToast("No valid password entries found in the file.", 'warning');
+        }
+    } else {
+        createDynamicToast("Invalid file format. Please select a valid .secured file.", 'danger');
+    }
+}
 
 /**
  * Exports all passwords to a Secured file (JSON content).
+ * Prompts for encryption password first.
  */
 function exportToSecured() {
     if (currentPasswords.length === 0) {
-        alert("No passwords to export.");
+        createDynamicToast("No passwords to export.", 'warning');
         return;
     }
 
-    const dataStr = JSON.stringify(currentPasswords, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' }); // Type remains JSON, but extension changes
-    const url = URL.createObjectURL(dataBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.secured`;
-    document.body.appendChild(link);
+    // Show encryption password modal
+    const encryptionModal = new bootstrap.Modal(document.getElementById('encryptionModal'));
+    encryptionModal.show();
+}
 
+/**
+ * Completes the export process with encryption
+ * @param {string} password - The encryption password
+ */
+function completeEncryptedExport(password) {
     try {
-        link.click();
-    } catch (err) {
-        // fallback: open the blob URL in a new tab so user can manually save it
-        window.open(url, '_blank');
-    }
+        // Create the data to export
+        const dataStr = JSON.stringify(currentPasswords, null, 2);
+        
+        // Encrypt the data
+        const encryptedData = encryptData(dataStr, password);
+        
+        // Create and download the file
+        const dataBlob = new Blob([encryptedData], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `passwords-backup-${new Date().toISOString().split('T')[0]}.secured`;
+        document.body.appendChild(link);
 
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+        try {
+            link.click();
+            createDynamicToast("Passwords exported successfully!", 'success');
+        } catch (err) {
+            // fallback: open the blob URL in a new tab so user can manually save it
+            window.open(url, '_blank');
+            createDynamicToast("Passwords exported successfully! (opened in new tab)", 'success');
+        }
+
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error("Export error:", error);
+        createDynamicToast("Failed to export passwords: " + error.message, 'danger');
+    }
+}
+
+/**
+ * Completes the import process with decryption
+ * @param {string} password - The decryption password
+ */
+function completeDecryptedImport(password) {
+    try {
+        if (!pendingImportFile) {
+            createDynamicToast("No file to import.", 'danger');
+            return;
+        }
+
+        // Decrypt the data
+        const decryptedData = decryptData(pendingImportFile, password);
+        
+        // Parse and process the decrypted data
+        const importedPasswords = JSON.parse(decryptedData);
+        processImportedPasswords(importedPasswords);
+        
+        // Clear the pending import file
+        pendingImportFile = null;
+    } catch (error) {
+        console.error("Import error:", error);
+        createDynamicToast("Failed to import passwords: " + error.message, 'danger');
+    }
 }
 
 
@@ -1115,6 +1308,157 @@ function setupEventListeners() {
 
     if (securedExportButton) {
         securedExportButton.addEventListener('click', exportToSecured);
+    }
+
+    // --- ENCRYPTION PASSWORD MODAL HANDLERS ---
+    const encryptionModal = document.getElementById('encryptionModal');
+    const encryptionPassword = document.getElementById('encryptionPassword');
+    const confirmEncryptionPassword = document.getElementById('confirmEncryptionPassword');
+    const toggleEncryptionPassword = document.getElementById('toggleEncryptionPassword');
+    const toggleConfirmPassword = document.getElementById('toggleConfirmPassword');
+    const confirmEncryptionBtn = document.getElementById('confirmEncryption');
+
+    if (toggleEncryptionPassword) {
+        toggleEncryptionPassword.addEventListener('click', function(event) {
+            event.preventDefault();
+            if (encryptionPassword.type === 'password') {
+                encryptionPassword.type = 'text';
+                this.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+            } else {
+                encryptionPassword.type = 'password';
+                this.innerHTML = '<i class="fa-solid fa-eye"></i>';
+            }
+        });
+    }
+
+    if (toggleConfirmPassword) {
+        toggleConfirmPassword.addEventListener('click', function(event) {
+            event.preventDefault();
+            if (confirmEncryptionPassword.type === 'password') {
+                confirmEncryptionPassword.type = 'text';
+                this.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+            } else {
+                confirmEncryptionPassword.type = 'password';
+                this.innerHTML = '<i class="fa-solid fa-eye"></i>';
+            }
+        });
+    }
+
+    if (confirmEncryptionBtn) {
+        confirmEncryptionBtn.addEventListener('click', function() {
+            const pwd = encryptionPassword.value;
+            const confirmPwd = confirmEncryptionPassword.value;
+
+            // Validation
+            if (!pwd || pwd.length < MIN_ENCRYPTION_PASSWORD_LENGTH) {
+                createDynamicToast(`Password must be at least ${MIN_ENCRYPTION_PASSWORD_LENGTH} characters long`, 'warning');
+                return;
+            }
+
+            if (pwd !== confirmPwd) {
+                createDynamicToast('Passwords do not match', 'warning');
+                return;
+            }
+
+            // Close modal and proceed with export
+            const modal = bootstrap.Modal.getInstance(encryptionModal);
+            if (modal) modal.hide();
+
+            // Clear inputs
+            encryptionPassword.value = '';
+            confirmEncryptionPassword.value = '';
+
+            // Perform export
+            completeEncryptedExport(pwd);
+        });
+    }
+
+    // Reset encryption modal when closed
+    if (encryptionModal) {
+        encryptionModal.addEventListener('hidden.bs.modal', function() {
+            if (encryptionPassword) encryptionPassword.value = '';
+            if (confirmEncryptionPassword) confirmEncryptionPassword.value = '';
+            if (encryptionPassword) encryptionPassword.type = 'password';
+            if (confirmEncryptionPassword) confirmEncryptionPassword.type = 'password';
+        });
+    }
+
+    // --- DECRYPTION PASSWORD MODAL HANDLERS ---
+    const decryptionModal = document.getElementById('decryptionModal');
+    const decryptionPassword = document.getElementById('decryptionPassword');
+    const toggleDecryptionPassword = document.getElementById('toggleDecryptionPassword');
+    const confirmDecryptionBtn = document.getElementById('confirmDecryption');
+
+    if (toggleDecryptionPassword) {
+        toggleDecryptionPassword.addEventListener('click', function(event) {
+            event.preventDefault();
+            if (decryptionPassword.type === 'password') {
+                decryptionPassword.type = 'text';
+                this.innerHTML = '<i class="fa-solid fa-eye-slash"></i>';
+            } else {
+                decryptionPassword.type = 'password';
+                this.innerHTML = '<i class="fa-solid fa-eye"></i>';
+            }
+        });
+    }
+
+    if (confirmDecryptionBtn) {
+        confirmDecryptionBtn.addEventListener('click', function() {
+            // Check rate limiting first
+            const rateCheck = checkDecryptionRateLimit();
+            if (!rateCheck.allowed) {
+                createDynamicToast(rateCheck.message, 'danger');
+                return;
+            }
+
+            const pwd = decryptionPassword.value;
+
+            if (!pwd) {
+                createDynamicToast('Please enter a password', 'warning');
+                return;
+            }
+
+            if (!pendingImportFile) {
+                createDynamicToast('No file to import.', 'danger');
+                return;
+            }
+
+            try {
+                // Perform import BEFORE closing modal to avoid clearing the file
+                completeDecryptedImport(pwd);
+
+                // Clear input and reset attempts on successful import
+                decryptionPassword.value = '';
+                resetDecryptionAttempts();
+
+                // Close modal after import completes
+                const modal = bootstrap.Modal.getInstance(decryptionModal);
+                if (modal) modal.hide();
+            } catch (error) {
+                // Record failed attempt
+                recordFailedDecryptionAttempt();
+                updateDecryptionAttemptWarning();
+                
+                const remainingAttempts = MAX_DECRYPTION_ATTEMPTS - decryptionAttempts;
+                let errorMsg = 'Decryption failed: ' + error.message;
+                
+                if (remainingAttempts > 0) {
+                    errorMsg += ` (${remainingAttempts} attempt${remainingAttempts === 1 ? '' : 's'} remaining)`;
+                }
+                
+                createDynamicToast(errorMsg, 'danger');
+            }
+        });
+    }
+
+    // Reset decryption modal when closed
+    if (decryptionModal) {
+        decryptionModal.addEventListener('hidden.bs.modal', function() {
+            if (decryptionPassword) decryptionPassword.value = '';
+            if (decryptionPassword) decryptionPassword.type = 'password';
+            // Clear pending file after modal closes (user cancelled without importing)
+            pendingImportFile = null;
+        });
     }
 
     // Install App Button

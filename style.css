@@ -39,6 +39,15 @@ body.dark-theme {
     overflow: auto; /* Add this to force scrollbars for inputs if content overflows */
 }
 
+.form-control::placeholder {
+    color: var(--secondary-color); /* Default for light theme, if not overridden */
+}
+
+body.dark-theme .form-control::placeholder {
+    color: gray;
+}
+
+
 .form-control:focus {
     background-color: var(--background-color);
     color: var(--text-color);

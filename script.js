@@ -1481,10 +1481,109 @@ function setupEventListeners() {
 // ------------------------------------------------------------------
 const LOCK_KEY_STORAGE = 'localVault_totpSecret';
 
+function protectLockScreenFromTampering() {
+    const lockScreen = document.getElementById('lockScreen');
+    if (!lockScreen) return;
+
+    // Monitor for DOM removal or attribute changes
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            // Check if lockScreen was removed from DOM
+            if (mutation.type === 'childList') {
+                if (!document.body.contains(lockScreen)) {
+                    triggerSecurityBreach();
+                    return;
+                }
+            }
+            // Check if display style was changed while locked
+            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
+                if (lockScreen.style.display === 'none' && document.getElementById('unlockCodeInput')) {
+                    // User tried to hide the lock screen with dev tools
+                    triggerSecurityBreach();
+                }
+            }
+        });
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style']
+    });
+
+    // Also watch for direct removal attempts
+    const originalRemove = Element.prototype.remove;
+    Element.prototype.remove = function() {
+        if (this === lockScreen) {
+            triggerSecurityBreach();
+            return;
+        }
+        originalRemove.call(this);
+    };
+
+    // Watch for CSS display property manipulation via style attribute
+    const lockScreenProxy = new Proxy(lockScreen.style, {
+        set: (target, property, value) => {
+            if (property === 'display' && value === 'none' && document.getElementById('unlockCodeInput')) {
+                triggerSecurityBreach();
+                return true;
+            }
+            target[property] = value;
+            return true;
+        }
+    });
+}
+
+function triggerSecurityBreach() {
+    // Hide entire page content
+    const mainLayout = document.querySelector('.desktop-layout');
+    const navbar = document.querySelector('.navbar');
+    if (mainLayout) mainLayout.style.display = 'none';
+    if (navbar) navbar.style.display = 'none';
+    
+    // Show security breach message
+    const breachScreen = document.createElement('div');
+    breachScreen.id = 'securityBreachScreen';
+    breachScreen.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: linear-gradient(135deg, #1a1a1a, #2d2d2d);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 99999;
+        color: white;
+        font-family: Arial, sans-serif;
+    `;
+    
+    breachScreen.innerHTML = `
+        <div style="text-align: center;">
+            <i class="fas fa-exclamation-triangle" style="font-size: 4rem; color: #ff6b6b; margin-bottom: 20px;"></i>
+            <h1 style="margin-bottom: 20px; color: #ff6b6b;">Security Breach Detected</h1>
+            <p style="font-size: 1.1rem; margin-bottom: 30px; color: #ccc;">Unauthorized access attempt blocked.</p>
+            <p style="color: #888;">Your vault is protected. This page is now locked.</p>
+        </div>
+    `;
+    
+    document.body.appendChild(breachScreen);
+    
+    // Prevent any further interaction
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+}
+
 function initSecurity() {
     const lockScreen = document.getElementById('lockScreen');
     const lockContent = document.getElementById('lockContent');
     if (!lockScreen || !lockContent) return;
+
+    // Enable tampering protection
+    protectLockScreenFromTampering();
 
     // Migration: Clear old legacy key if it exists to prevent getting stuck
     if (localStorage.getItem('localVault_securityKey')) {

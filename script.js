@@ -1485,6 +1485,9 @@ function protectLockScreenFromTampering() {
     const lockScreen = document.getElementById('lockScreen');
     if (!lockScreen) return;
 
+    // Store the original computed style to detect changes
+    let isLocked = () => !!document.getElementById('unlockCodeInput');
+
     // Monitor for DOM removal or attribute changes
     const observer = new MutationObserver((mutations) => {
         mutations.forEach((mutation) => {
@@ -1495,21 +1498,26 @@ function protectLockScreenFromTampering() {
                     return;
                 }
             }
-            // Check if display style was changed while locked
-            if (mutation.type === 'attributes' && mutation.attributeName === 'style') {
-                if (lockScreen.style.display === 'none' && document.getElementById('unlockCodeInput')) {
-                    // User tried to hide the lock screen with dev tools
+            // Check if style or class was changed while locked
+            if (mutation.type === 'attributes' && isLocked()) {
+                const computed = window.getComputedStyle(lockScreen);
+                if (computed.display === 'none' || computed.visibility === 'hidden' || computed.opacity === '0') {
                     triggerSecurityBreach();
+                    return;
                 }
             }
         });
     });
 
+    observer.observe(lockScreen, {
+        attributes: true,
+        attributeFilter: ['style', 'class'],
+        attributeOldValue: true
+    });
+
     observer.observe(document.body, {
         childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['style']
+        subtree: false
     });
 
     // Also watch for direct removal attempts
@@ -1522,17 +1530,30 @@ function protectLockScreenFromTampering() {
         originalRemove.call(this);
     };
 
-    // Watch for CSS display property manipulation via style attribute
-    const lockScreenProxy = new Proxy(lockScreen.style, {
-        set: (target, property, value) => {
-            if (property === 'display' && value === 'none' && document.getElementById('unlockCodeInput')) {
+    // Periodic check to catch any hidden attempts
+    setInterval(() => {
+        if (isLocked() && document.body.contains(lockScreen)) {
+            const computed = window.getComputedStyle(lockScreen);
+            if (computed.display === 'none' || computed.visibility === 'hidden' || computed.opacity === '0') {
                 triggerSecurityBreach();
-                return true;
             }
-            target[property] = value;
-            return true;
         }
-    });
+    }, 500);
+
+    // Monitor for className changes
+    const originalSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function(name, value) {
+        if (this === lockScreen && (name === 'style' || name === 'class') && isLocked()) {
+            originalSetAttribute.call(this, name, value);
+            const computed = window.getComputedStyle(lockScreen);
+            if (computed.display === 'none' || computed.visibility === 'hidden' || computed.opacity === '0') {
+                triggerSecurityBreach();
+                return;
+            }
+        } else {
+            originalSetAttribute.call(this, name, value);
+        }
+    };
 }
 
 function triggerSecurityBreach() {

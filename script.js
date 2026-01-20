@@ -2,7 +2,6 @@
 const DB_NAME = 'PasswordVaultDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'passwords';
-
 // --- Global State Variables ---
 let db;
 let currentPasswords = []; // Holds all passwords currently in the DB
@@ -1744,6 +1743,7 @@ function renderUnlockMode(container, secretBase32) {
             
             if (delta !== null) {
                 document.getElementById('lockScreen').style.display = 'none';
+                document.getElementById('lockContent').innerHTML = ''; // Clear content to disable isLocked()
                 createDynamicToast('Identity Verified.', 'success');
             } else {
                 input.classList.add('is-invalid');
